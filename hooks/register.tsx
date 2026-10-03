@@ -1,16 +1,20 @@
 import { atom, read, update } from 'claude-code'
 import type { AgentInfo, EngineInterface, Register, RenderChildren, RenderElement, SessionMessage, TurnUsage } from 'claude-code'
 
-import type { AgentpaneAgent as Agent, AgentpaneTokens as Tokens } from '../types'
+import type { AgentpaneAgent as Agent, AgentpaneLoop as Loop, AgentpaneTokens as Tokens } from '../types'
+import { fmtDuration, laneRows } from './time'
+import type { Lane } from './time'
 
 const PANE = 'agents'
 const TITLE = 'Agents'
 // lazy: polls the engine's agent list every second, as no agent-status event reaches a mod; move to one if it lands.
 const SYNC_MS = 1_000
-const FRAME_MS = 200 // the list's spinners and shimmer, only while it shows a running agent
-const FOLD_AFTER_MS = 10_000 // the pane folds away this long after the last agent finished
 const CONFIRM_MS = 5_000 // a pressed Stop waits this long for the press that confirms it
-const MAX_FINISHED = 8
+const SPAWN_GRACE_MS = 10_000 // a spawn the engine's list does not show yet stays this long
+const LOOP_SHOWN_MS = 60_000 // a model loop no agent claims shows while it made a request this recently
+const LOOP_KEPT_MS = 300_000 // and is forgotten after this long
+const INLINE_ROWS = 8 // the pane above the prompt, where it cannot dock: a summary
+const INLINE_READ_ROWS = 24 // and while it shows one conversation
 const PROMPT_LINES = 4 // a prompt is the agent's brief: its head is enough
 const PREVIEW_LINES = 3 // of a tool's result
 const MAX_BLOCKS = 40 // of a conversation, drawn at most
@@ -20,24 +24,25 @@ const MAX_LINE = 500 // characters of one result line kept
 const MAX_REPLY = 6_000 // characters of one reply drawn as Markdown
 const TEXT_BUDGET = 60_000 // characters of a conversation drawn at once
 const MIN_ROWS = 3
+const BATCH_GAP_MS = 60_000 // an agent started this long after the last one ended begins a new batch
+const MAX_LANES = 8 // rows of the time axis
+const DUR_COLS = 8 // a lane's clock, right-aligned
 
 const agents = atom({ plugin: 'agentpane', key: 'agents' } as const, [])
 const activity = atom({ plugin: 'agentpane', key: 'activity' } as const, {})
 const viewing = atom({ plugin: 'agentpane', key: 'viewing' } as const, null)
 const scrollTop = atom({ plugin: 'agentpane', key: 'scrollTop' } as const, null)
 const rev = atom({ plugin: 'agentpane', key: 'rev' } as const, 0)
-const tick = atom({ plugin: 'agentpane', key: 'tick' } as const, 0)
 const expanded = atom({ plugin: 'agentpane', key: 'expanded' } as const, [])
 const folded = atom({ plugin: 'agentpane', key: 'folded' } as const, false)
 const tab = atom({ plugin: 'agentpane', key: 'tab' } as const, false)
 const tokens = atom({ plugin: 'agentpane', key: 'tokens' } as const, {})
-const frame = atom({ plugin: 'agentpane', key: 'frame' } as const, 0)
+const loops = atom({ plugin: 'agentpane', key: 'loops' } as const, {})
 const confirmStop = atom({ plugin: 'agentpane', key: 'confirmStop' } as const, null)
 const hideDone = atom({ plugin: 'agentpane', key: 'hideDone' } as const, false)
 
-// Claude Code's own spinner glyphs, out and back. Colors are theme keys, so the pane follows the person's
-// theme (dark, light, colorblind) as Claude Code's own rows do.
-const SPIN = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
+// Colors are theme keys, so the pane follows the person's theme (dark, light, colorblind) as Claude Code's
+// own rows do. The spinner and shimmer live in live.tsx, on the surface's frame clock.
 const WIDE_SHARE = 0.62 // of the terminal, for the pane while it shows one agent's conversation
 const MIN_WIDE = 60
 const HANDLE_COLS = 2 // the hide handle's column, against the pane's left edge: its glyph and one space
@@ -46,6 +51,32 @@ const RIGHT_MARGIN = 1 // matches that one space on the right, so the content si
 const HANDLE = ['╷ ', '│ ', '▸ ', '│ ', '╵ ']
 const CLOSE_MARK_COLS = 3 // the engine draws its close mark over the end of the pane's first row
 const BAND_RIGHT_PAD = 5 // clear of the engine's [-] band toggle at the band's top right
+
+// The person's settings (`/config`, or pluginConfigs.agentpane.options in settings.json).
+export type Config = { autoOpen: boolean; foldAfterMs: number; motion: boolean; toasts: boolean; keepFinished: number; statusLine: boolean }
+export const parseConfig = (options: unknown): Config => {
+  const o = (options && typeof options === 'object' ? options : {}) as Record<string, unknown>
+  const num = (v: unknown, d: number, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d)
+  const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d)
+  return {
+    autoOpen: bool(o.autoOpen, true),
+    foldAfterMs: num(o.foldAfter, 10, 0, 3600) * 1000,
+    motion: bool(o.motion, true),
+    toasts: bool(o.toasts, true),
+    keepFinished: num(o.keepFinished, 8, 1, 30),
+    statusLine: bool(o.statusLine, true),
+  }
+}
+let cfg = parseConfig(undefined) // set by register from the options it is given
+
+// "claude-sonnet-5-5" -> "Sonnet 5.5", "claude-haiku-4-5-20251001" -> "Haiku 4.5"; anything else as given.
+export const prettyModel = (id: string | undefined) => {
+  if (!id) return ''
+  const m = /^claude-([a-z]+)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(id)
+  if (!m) return id
+  const [, family = '', major, minor, wide] = m
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}${minor ? `.${minor}` : ''}${wide ? ' (1M)' : ''}`
+}
 
 // How a status reads and shows, wherever an agent's status is drawn.
 export const look = (status: string): { word: string; mark: string; color?: string; dim?: boolean } =>
@@ -140,27 +171,43 @@ export const describeTool = (tool: string, input: Record<string, unknown>) => {
 // The engine's list over what the pane knew: when each was first seen, and when it was first seen done.
 export const mergeAgents = (before: readonly Agent[], list: readonly AgentInfo[], now: number): Agent[] => {
   const prev = new Map(before.map(a => [a.id, a]))
-  return list.map(info => {
+  const listed = new Set(list.map(a => a.id))
+  // A spawn the hook recorded that the engine's list does not show yet: kept a moment, not dropped.
+  const pending = before.filter(a => !listed.has(a.id) && a.status === 'running' && now - a.firstSeen < SPAWN_GRACE_MS)
+  const merged = list.map(info => {
     const old = prev.get(info.id)
     const running = info.status === 'running'
     const seenRunning = (old?.seenRunning ?? false) || running
     const endedAt = running ? undefined : (old?.endedAt ?? (seenRunning ? now : undefined))
+    const resumed = running && old?.endedAt !== undefined // ended, then sent a message: a new run from now
     return {
       id: info.id, description: info.description, type: info.type, status: info.status,
       ...(info.name && { name: info.name }), ...(info.parentId && { parentId: info.parentId }),
-      firstSeen: old?.firstSeen ?? now, seenRunning, ...(endedAt !== undefined && { endedAt }),
+      firstSeen: resumed ? now : (old?.firstSeen ?? now), seenRunning, ...(endedAt !== undefined && { endedAt }),
+      ...(old?.model && { model: old.model }),
     }
   })
+  return [...merged, ...pending]
+}
+
+// A spawn as the pane records it the moment it starts, before the engine's list shows it.
+export const spawned = (list: readonly Agent[], a: Agent): Agent[] =>
+  list.some(x => x.id === a.id) ? list.map(x => (x.id === a.id ? { ...x, model: a.model ?? x.model } : x)) : [...list, a]
+
+// A model loop no agent claims, one more request.
+export const stepLoop = (all: Readonly<Record<string, Loop>>, id: string, now: number): Record<string, Loop> => {
+  const old = all[id]
+  return { ...all, [id]: { firstSeen: old?.firstSeen ?? now, lastSeen: now, requests: (old?.requests ?? 0) + 1 } }
 }
 
 // What the list shows: every running agent and the most recently finished ones, in the engine's order.
-export const visibleAgents = (all: readonly Agent[]): Agent[] => {
+export const visibleAgents = (all: readonly Agent[], keep = 8): Agent[] => {
   const ended = (a: Agent, i: number) => [a.endedAt ?? a.firstSeen, i] as const
   const recent = all
     .map((a, i) => ({ a, key: ended(a, i) }))
     .filter(({ a }) => a.status !== 'running')
     .sort((x, y) => y.key[0] - x.key[0] || y.key[1] - x.key[1])
-    .slice(0, MAX_FINISHED)
+    .slice(0, keep)
     .map(({ a }) => a)
   return all.filter(a => a.status === 'running' || recent.includes(a))
 }
@@ -184,31 +231,18 @@ export const arrange = (shown: readonly Agent[], onlyRunning = false) => {
   return { running: tops.filter(t => t.agent.status === 'running'), finished: tops.filter(t => t.agent.status !== 'running') }
 }
 
-// As Claude Code's own status lines read a duration: "8s", "1m 13s", "1h 2m".
-export const fmtDuration = (ms: number) => {
-  const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60), h = Math.floor(m / 60)
-  return h ? `${h}h ${m % 60}m` : m ? `${m}m ${s % 60}s` : `${s}s`
-}
 const elapsed = (a: Agent, now: number) => (a.seenRunning ? fmtDuration((a.endedAt ?? now) - a.firstSeen) : '')
 
-// A word with a band of light across it, as Claude Code's spinner verb shimmers: runs of base or shimmer.
-export const shimmer = (text: string, step: number): { text: string; lit: boolean }[] => {
-  const chars = [...text]
-  const at = (step % (chars.length + 6)) - 3
-  const out: { text: string; lit: boolean }[] = []
-  chars.forEach((ch, i) => {
-    const lit = Math.abs(i - at) <= 1
-    const last = out[out.length - 1]
-    if (last && last.lit === lit) last.text += ch
-    else out.push({ text: ch, lit })
-  })
-  return out
-}
-
 // One response's usage added to an agent's tally; `context` is what its latest request carried.
-export const addUsage = (t: Tokens | undefined, u: Pick<TurnUsage, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens'>): Tokens => {
+export const addUsage = (
+  t: Tokens | undefined,
+  u: Pick<TurnUsage, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens'>,
+  stopReason: string | null = null,
+): Tokens => {
   const input = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+  const truncated = (t?.truncated ?? 0) + (stopReason === 'max_tokens' ? 1 : 0)
   return {
+    ...(truncated && { truncated }),
     input: (t?.input ?? 0) + input,
     cached: (t?.cached ?? 0) + u.cache_read_input_tokens,
     output: (t?.output ?? 0) + u.output_tokens,
@@ -317,21 +351,76 @@ export const finishNotice = (before: readonly Agent[], after: readonly Agent[], 
   return `✓ ${ended.length} agents finished${failed ? ` · ✗ ${failed} failed` : ''}`
 }
 
+const uses = (n: number) => `${n} tool use${n === 1 ? '' : 's'}`
+
+// Pure: the latest batch, oldest first: the agents that ran, back from the newest to a start more than
+// BATCH_GAP_MS after everything before it had ended.
+export const latestBatch = (all: readonly Agent[]): Agent[] => {
+  const ran = all.filter(a => a.seenRunning).sort((x, y) => x.firstSeen - y.firstSeen)
+  let start = 0
+  let reach = -Infinity // when the agents so far had all ended; never, while one runs
+  ran.forEach((a, i) => {
+    if (a.firstSeen > reach + BATCH_GAP_MS) start = i
+    reach = Math.max(reach, a.status === 'running' ? Infinity : (a.endedAt ?? a.firstSeen))
+  })
+  return ran.slice(start)
+}
+
+// Pure: what a batch of two or more came to, once none of it runs: how long it took, how much agent time
+// that was and so how much ran side by side, and what it used.
+export const batchReceipt = (
+  batch: readonly Agent[],
+  act: Readonly<Record<string, { tools: number }>>,
+  tok: Readonly<Record<string, Tokens>>,
+) => {
+  if (batch.length < 2 || batch.some(a => a.status === 'running')) return null
+  const end = (a: Agent) => a.endedAt ?? a.firstSeen
+  const wall = Math.max(...batch.map(end)) - Math.min(...batch.map(a => a.firstSeen))
+  // An agent's subagents run inside its own time: only the agents at the top of the batch add to it.
+  const work = batch.filter(a => !batch.some(p => p.id === a.parentId)).reduce((n, a) => n + end(a) - a.firstSeen, 0)
+  const count = (s: string) => batch.filter(a => a.status === s).length
+  const tools = batch.reduce((n, a) => n + (act[a.id]?.tools ?? 0), 0)
+  const used = batch.reduce((n, a) => n + (tok[a.id] ? tok[a.id]!.input + tok[a.id]!.output : 0), 0)
+  const together = wall > 0 ? work / wall : 1
+  const who = count('completed') === batch.length
+    ? `${batch.length} agents`
+    : [...new Set(['completed', 'failed', 'killed', ...batch.map(a => a.status)])]
+        .map(s => (count(s) ? `${count(s)} ${look(s).word.toLowerCase()}` : '')).filter(Boolean).join(' · ')
+  return {
+    failed: count('failed') > 0,
+    text: [
+      `${who} in ${fmtDuration(wall)}`,
+      `${fmtDuration(work)} of agent time${together >= 1.2 ? ` (${together.toFixed(1)}× in parallel)` : ''}`,
+      tools ? uses(tools) : '',
+      used ? `${fmtTokens(used)} tokens` : '',
+    ].filter(Boolean).join(' · '),
+  }
+}
+
+// Pure: the status line under the prompt while a batch runs, or undefined to clear it.
+export const statusOf = (batch: readonly Agent[]) => {
+  const running = batch.filter(a => a.status === 'running').length
+  if (!running) return undefined
+  const failed = batch.filter(a => a.status === 'failed').length
+  const of = running === batch.length ? `${running} agent${running === 1 ? '' : 's'} running` : `${running} of ${batch.length} agents running`
+  return `${look('running').mark} ${of}${failed ? ` · ${look('failed').mark} ${failed} failed` : ''}`
+}
+
 // Module state that nothing draws from (a reload resets it to "nothing opened yet").
-let autoOpened = false // the mod opened the pane unasked; only such a pane does the mod close for being inline
+let autoOpened = false // the mod opened the pane unasked, rather than the person
 let closedByPerson = false // closed by hand while agents ran: stays shut until a new one starts
-let closingItself = false // the close under way is the mod's own
 let foldingAway = false // the close under way is a fold: the tab above the prompt brings the pane back
 let foldWhenIdle = false // agents ran while the pane was open: fold it once they are all done
-let inlineOnly = false // this surface seated an unasked pane inline: no more unasked opening
 let isFullscreen: boolean | undefined // from the last drawing: only the fullscreen layout docks a pane
 let lastPlacement: string | null = null
 let lastColumns = 0 // the terminal's width, from the last drawing
 let lastRunningAt = 0
 let armedAt = 0 // when Stop was pressed once
+// The status line as last set, so it is set only when it changes; null: not yet by this module, so a line a
+// reload left behind is cleared on the first sync.
+let lastStatus: string | undefined | null = null
 let viewingId: string | null = null // the conversation on screen, for the events that redraw it
 let transcript = { key: '', blocks: [] as Block[] } // that conversation's blocks, read once per change
-let listIsLive = false // the pane shows the list with an agent running: its spinners and shimmer move
 // lazy: one sync at a time by a module flag; a slow agent.list only skips ticks.
 let syncing = false
 
@@ -345,12 +434,10 @@ async function sync($: EngineInterface) {
     const list = mergeAgents(before, await $.agent.list(), now)
     if (JSON.stringify(list) !== JSON.stringify(before)) await update($, agents, () => list)
     const notice = finishNotice(before, list, now)
-    if (notice) $.ui.toast(notice)
+    if (notice && cfg.toasts) $.ui.toast(notice)
     const ids = new Set(list.map(a => a.id))
     if (Object.keys(await read($, activity)).some(id => !ids.has(id)))
       await update($, activity, m => Object.fromEntries(Object.entries(m).filter(([id]) => ids.has(id))))
-    if (Object.keys(await read($, tokens)).some(id => !ids.has(id)))
-      await update($, tokens, m => Object.fromEntries(Object.entries(m).filter(([id]) => ids.has(id))))
 
     const running = list.filter(a => a.status === 'running')
     const pane = (await $.ui.panes()).find(p => p.id === PANE)
@@ -361,21 +448,35 @@ async function sync($: EngineInterface) {
     }
     if (running.length) lastRunningAt = now
     if (pane && running.length) foldWhenIdle = true
-    if (pane && autoOpened && lastPlacement === 'inline') {
-      inlineOnly = true // not a sidebar here: leave the opening to the person
-      await closeItself($)
-    } else if (!pane && running.length && !closedByPerson && !inlineOnly && isFullscreen !== false && !(await read($, folded))) {
+    if (!pane && running.length && cfg.autoOpen && !closedByPerson && !(await read($, folded))) {
       autoOpened = true
-      await openPane($, false)
-    } else if (pane && foldWhenIdle && !running.length && now - lastRunningAt >= FOLD_AFTER_MS && !pane.isFocused && !(await read($, viewing))) {
+      await openPane($, 'list') // docked beside a fullscreen transcript, else the summary above the prompt
+    } else if (
+      pane && foldWhenIdle && !running.length && cfg.foldAfterMs > 0 && now - lastRunningAt >= cfg.foldAfterMs &&
+      !pane.isFocused && !(await read($, viewing))
+    ) {
       await foldAway($) // all done; not while the person reads a conversation
     }
     // Folded, the tab above the prompt stands in for the pane while the session has agents to show.
     const showTab = (await read($, folded)) && list.length > 0
     if (showTab !== (await read($, tab))) await update($, tab, () => showTab)
-    if ((pane || showTab) && running.length) await update($, tick, n => n + 1) // the clocks run
-    listIsLive = !!pane && running.length > 0 && !(await read($, viewing))
     if ((await read($, confirmStop)) && now - armedAt > CONFIRM_MS) await update($, confirmStop, () => null)
+
+    // Loops that turned out to be agents, or went quiet long ago, are forgotten; tokens of neither go too.
+    const loopsNow = await read($, loops)
+    const keptLoops = Object.fromEntries(Object.entries(loopsNow).filter(([id, l]) => !ids.has(id) && now - l.lastSeen < LOOP_KEPT_MS))
+    if (Object.keys(keptLoops).length !== Object.keys(loopsNow).length) await update($, loops, () => keptLoops)
+    const kept = (id: string) => ids.has(id) || id in keptLoops
+    if (Object.keys(await read($, tokens)).some(id => !kept(id)))
+      await update($, tokens, m => Object.fromEntries(Object.entries(m).filter(([id]) => kept(id))))
+
+    // Under the prompt while a batch runs and the pane is not on screen (folded, closed, or waiting for room).
+    const placed = cfg.statusLine && (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
+    const status = cfg.statusLine && !placed ? statusOf(latestBatch(list)) : undefined
+    if (status !== lastStatus) {
+      lastStatus = status
+      $.ui.status(status)
+    }
   } catch {
     // the next tick tries again
   } finally {
@@ -392,11 +493,14 @@ async function showList($: EngineInterface, { clearFold = false } = {}) {
   if (clearFold) await update($, folded, () => false)
 }
 
-// The pane at its usual width, or widened to read one agent's conversation (docked only).
-// `focus` asks for the keyboard (granted over an empty composer), so the conversation's b/k/j keys work.
-async function openPane($: EngineInterface, wide: boolean, focus = false) {
-  const columns = wide && lastPlacement === 'dock' && lastColumns ? Math.max(MIN_WIDE, Math.round(lastColumns * WIDE_SHARE)) : undefined
-  await $.ui.open({ id: PANE, title: TITLE, ...(columns && { columns }), ...(focus && { focus: true as const }) })
+// The pane sized for what it shows: docked, at its usual width or widened to read a conversation; above the
+// prompt, a summary's rows or a conversation's. `focus` asks for the keyboard (granted over an empty
+// composer), so the conversation's b/k/j keys work.
+async function openPane($: EngineInterface, view: 'list' | 'conversation', focus = false) {
+  const docked = lastPlacement ? lastPlacement === 'dock' : isFullscreen !== false
+  const columns = docked && view === 'conversation' && lastColumns ? Math.max(MIN_WIDE, Math.round(lastColumns * WIDE_SHARE)) : undefined
+  const rows = docked ? undefined : view === 'conversation' ? INLINE_READ_ROWS : INLINE_ROWS
+  await $.ui.open({ id: PANE, title: TITLE, ...(columns && { columns }), ...(rows && { rows }), ...(focus && { focus: true as const }) })
 }
 
 // Fold: the pane closes, so the transcript has the width back, and a tab above the prompt reopens it.
@@ -418,7 +522,7 @@ async function unfold($: EngineInterface) {
   closedByPerson = false
   autoOpened = false
   foldWhenIdle = (await read($, agents)).some(a => a.status === 'running')
-  await openPane($, !!(await read($, viewing)))
+  await openPane($, (await read($, viewing)) ? 'conversation' : 'list')
 }
 
 // Stop a running agent with Claude Code's own TaskStop, on the person's confirmed press of Stop.
@@ -431,25 +535,17 @@ async function stopAgent($: EngineInterface, a: Agent) {
   if (why) $.ui.toast(`Could not stop ${name}: ${fit(why, 120)}`)
 }
 
-async function closeItself($: EngineInterface) {
-  closingItself = true
-  try {
-    await $.ui.close({ id: PANE })
-  } finally {
-    closingItself = false
-  }
-}
-
 // The conversation on screen changed: draw it again.
 const redraw = ($: EngineInterface, agentId: string | undefined) => {
   if (agentId && agentId === viewingId) void update($, rev, n => n + 1).catch(() => undefined)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  cfg = parseConfig(options)
+
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'agentpane', description: 'Show or hide the pane of running agents' })
     $.clock.every(SYNC_MS, () => void sync($))
-    $.clock.every(FRAME_MS, () => void (listIsLive && update($, frame, n => n + 1).catch(() => undefined)))
     return next(e)
   })
 
@@ -464,7 +560,7 @@ export const register: Register = on => {
     foldWhenIdle = false
     await update($, folded, () => false)
     await update($, tab, () => false)
-    await openPane($, false, true) // asked for, so placed even where an unasked pane waits
+    await openPane($, 'list', true) // asked for, so placed even where an unasked pane waits
     return { text: 'Agents pane opened.' }
   })
 
@@ -476,7 +572,7 @@ export const register: Register = on => {
       await update($, confirmStop, () => null)
       if (!foldingAway) {
         // closed by hand (its close mark, Esc, ctrl+x x, /agentpane) while agents run: stays shut until a new one starts
-        if (!closingItself) closedByPerson = (await read($, agents)).some(a => a.status === 'running')
+        closedByPerson = (await read($, agents)).some(a => a.status === 'running')
         await update($, viewing, () => null)
       }
     }
@@ -496,38 +592,80 @@ export const register: Register = on => {
     return result
   })
 
-  // What each agent's responses cost, as the API reported each one; a response grows its conversation.
+  // An agent is listed the moment it starts, with the model it runs on, ahead of the next poll.
+  on('agent.spawn', async ($, e, next) => {
+    const started = await next(e)
+    const id = started.agentId
+    if (id && !started.deny) {
+      const a: Agent = {
+        id, description: e.description, type: e.subagentType, status: 'running',
+        ...(e.parentAgentId && { parentId: e.parentAgentId }), ...(e.name && { name: e.name }),
+        firstSeen: await $.clock.now(), seenRunning: true, ...(started.model && { model: started.model }),
+      }
+      void update($, agents, list => spawned(list, a)).catch(() => undefined)
+    }
+    return started
+  })
+
+  // What each agent's responses cost, as the API reported each one; a response grows its conversation. A
+  // loop no listed agent claims (a workflow's agent, a compaction or memory fork) is counted on its own.
   on('turn.step', async function* ($, e, next) {
     const result = yield* next(e)
     const id = e.agentId
-    const usage = result?.usage
-    if (id && usage) void update($, tokens, m => ({ ...m, [id]: addUsage(m[id], usage) })).catch(() => undefined)
+    if (id) {
+      const usage = result?.usage
+      if (usage) void update($, tokens, m => ({ ...m, [id]: addUsage(m[id], usage, result.stopReason) })).catch(() => undefined)
+      if (!(await read($, agents)).some(a => a.id === id)) {
+        const now = await $.clock.now()
+        void update($, loops, l => stepLoop(l, id, now)).catch(() => undefined)
+      }
+    }
     redraw($, id)
     return result
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Button, Markdown, Text } = els
+    // Live lines run on the surface's own frame clock where it has one (terminal, desktop); elsewhere they are
+    // static. Every surface's table names Client, but on the others it draws nothing: ask by surface.
+    const Client = (e.surface === 'terminal' || e.surface === 'desktop') && 'Client' in els ? els.Client : null
     lastPlacement = e.props.placement
     lastColumns = e.viewport?.columns ?? lastColumns
     isFullscreen = e.viewport?.isFullscreen ?? isFullscreen
-    const W = Math.max(22, e.props.bodyColumns - HANDLE_COLS - RIGHT_MARGIN) // the content, right of the handle
+    const inline = e.props.placement === 'inline' // above the prompt: a summary, no handle
+    const W = Math.max(22, e.props.bodyColumns - (inline ? 0 : HANDLE_COLS) - RIGHT_MARGIN) // the content, right of the handle
+    const viewed = e.props.view?.agentId ?? null // the agent the person has open in the main view
     const rows = Math.max(MIN_ROWS + 6, e.props.scroll.bodyRows)
     const now = await $.clock.now()
     const all = await read($, agents)
     const act = await read($, activity)
     const tok = await read($, tokens)
     const id = await read($, viewing)
-    const docked = e.props.placement === 'dock'
     const agent = id ? all.find(a => a.id === id) : undefined
     viewingId = agent ? agent.id : null
-    // The list moves at the frame rate, a conversation once a second.
-    const step = agent ? await read($, tick) : await read($, frame)
-    const spin = SPIN[step % SPIN.length] ?? '✻'
     const runningCount = all.filter(a => a.status === 'running').length
     const doneCount = all.length - runningCount
-    const uses = (n: number) => `${n} tool use${n === 1 ? '' : 's'}`
     const hint = (text: string) => <Text dimColor wrap="truncate-end">{text}</Text>
+    const alertOf = (a: Agent) => (tok[a.id]?.truncated ? `max_tokens ×${tok[a.id]!.truncated}` : '')
+    // A running agent's spinner, shimmering "Running…" and clock, redrawn by the surface, not by this hook.
+    const liveLine = (a: Agent, pad: string, detail: string) =>
+      Client && a.seenRunning ? (
+        <Client key={`live-${a.id}`} module="./live.tsx" props={{ since: a.firstSeen, now, pad, detail, alert: alertOf(a), motion: cfg.motion, clockOnly: false }} />
+      ) : (
+        <Text wrap="truncate-end">
+          <Text color="claude">{`${pad}  ✻ Running…`}</Text>
+          <Text dimColor>{` (${[elapsed(a, now), detail].filter(Boolean).join(' · ')}`}</Text>
+          {alertOf(a) ? <Text color="error">{` · ${alertOf(a)}`}</Text> : null}
+          <Text dimColor>)</Text>
+        </Text>
+      )
+    const clock = (a: Agent) =>
+      Client && a.status === 'running' && a.seenRunning ? (
+        <Client key={`clock-${a.id}`} module="./live.tsx" props={{ since: a.firstSeen, now, pad: '', detail: '', alert: '', motion: false, clockOnly: true }} />
+      ) : (
+        <Text dimColor>{elapsed(a, now)}</Text>
+      )
     // The first row, clear of the engine's close mark at its end.
     const header = (left: RenderChildren, right: RenderChildren) => (
       <Box width={W - CLOSE_MARK_COLS} justifyContent="space-between">
@@ -535,8 +673,13 @@ export const register: Register = on => {
         {typeof right === 'string' ? <Text dimColor>{right}</Text> : right}
       </Box>
     )
-    // A handle on the pane's left edge, halfway down: ▸ hides the pane.
-    const withHandle = (body: RenderChildren) => (
+    // A handle on the pane's left edge, halfway down: ▸ hides the pane. Above the prompt there is no edge to hold.
+    const withHandle = (body: RenderChildren) =>
+      inline ? (
+        <Box flexDirection="column" width={W}>
+          {body}
+        </Box>
+      ) : (
       <Box flexDirection="row">
         <Box key="handle" flexDirection="column" width={HANDLE_COLS} flexShrink={0}>
           {Array.from({ length: Math.max(0, Math.floor((rows - HANDLE.length) / 2)) }, () => <Text> </Text>)}
@@ -555,7 +698,7 @@ export const register: Register = on => {
           {body}
         </Box>
       </Box>
-    )
+      )
 
     // One agent's conversation, as Claude Code draws its own: > the brief, ⏺ replies and tool calls, ⎿ results.
     if (agent) {
@@ -572,11 +715,10 @@ export const register: Register = on => {
       const shown = pickBlocks(blocks, top)
       const newer = top === null ? 0 : blocks.length - top - 1 // blocks after the one at the top
       const used = tok[agent.id]
-      const t = elapsed(agent, now)
       const l = look(agent.status)
       const leave = async () => {
         await showList($)
-        if (docked) await openPane($, false) // back to the usual width
+        await openPane($, 'list') // back to the usual size
       }
       const toggle = (k: string) => update($, expanded, list => (list.includes(k) ? list.filter(x => x !== k) : [...list, k]))
       const result = (c: Call) =>
@@ -658,20 +800,24 @@ export const register: Register = on => {
             <Text bold>{fit(oneLine(agent.type), 20)}</Text>
             <Text>{`(${fit(oneLine(agent.description), Math.max(8, W - 42 - cols(agent.type)))})`}</Text>
           </Box>,
-          agent.status !== 'running' ? (
-            ''
-          ) : armed === agent.id ? (
-            <Button key="stop" label="Confirm stop" variant="primary" onPress={() => update($, confirmStop, () => null).then(() => stopAgent($, agent))} />
-          ) : (
-            <Button key="stop" label="■ Stop" dimColor onPress={arm} />
-          ),
+          <Box>
+            {clock(agent)}
+            {agent.status !== 'running' ? null : armed === agent.id ? (
+              <Button key="stop" label="Confirm stop" variant="primary" onPress={() => update($, confirmStop, () => null).then(() => stopAgent($, agent))} />
+            ) : (
+              <Button key="stop" label="■ Stop" dimColor onPress={arm} />
+            )}
+          </Box>,
         ),
-        <Text dimColor wrap="truncate-end">
-          {`  ⎿  ${[l.word, act[agent.id] ? uses(act[agent.id]!.tools) : '', t].filter(Boolean).join(' · ')}`}
+        <Text wrap="truncate-end">
+          <Text dimColor>
+            {`  ⎿  ${[l.word, act[agent.id] ? uses(act[agent.id]!.tools) : '', prettyModel(agent.model), viewed === agent.id ? 'also in the main view' : ''].filter(Boolean).join(' · ')}`}
+          </Text>
+          {alertOf(agent) ? <Text color="error">{` · ${alertOf(agent)}`}</Text> : null}
         </Text>,
         <Text dimColor wrap="truncate-end">
           {used
-            ? `     ${fmtTokens(used.input)} in (${fmtTokens(used.cached)} cached) · ${fmtTokens(used.output)} out · context ${fmtTokens(used.context)}`
+            ? `     ${fmtTokens(used.input)} in (${fmtTokens(used.cached)} cached) · ${fmtTokens(used.output)} out · context ${fmtTokens(used.context)} · ${used.requests} request${used.requests === 1 ? '' : 's'}`
             : '     no token figures yet'}
         </Text>,
         // Live: the newest blocks, anchored to the bottom (the oldest cut at the top). Scrolled back: from the
@@ -702,13 +848,110 @@ export const register: Register = on => {
     }
 
     // The list, as Claude Code draws an Agent call: ⏺ Type(description), ⎿ what it does, and a status line.
-    const shown = visibleAgents(all)
+    const shown = visibleAgents(all, cfg.keepFinished)
     const hidingDone = await read($, hideDone)
     const { running, finished } = arrange(shown, hidingDone)
     const goTo = async (to: string) => {
       await showList($)
       await update($, viewing, () => to)
-      await openPane($, docked, true)
+      await openPane($, 'conversation', true)
+    }
+    // Model loops no agent claims, recently active: a workflow's agents, compaction and memory forks.
+    const quiet = Object.entries(await read($, loops)).filter(([, x]) => now - x.lastSeen < LOOP_SHOWN_MS)
+    const loopsLine = quiet.length
+      ? `⏺ ${quiet.length} other model loop${quiet.length === 1 ? '' : 's'} (workflow agents or forks) · ${quiet.reduce((n, [, x]) => n + x.requests, 0)} requests · ${fmtTokens(quiet.reduce((n, [lid]) => n + (tok[lid]?.input ?? 0), 0))} in`
+      : ''
+    // The latest batch on one time axis (two agents or more, where there is room), and once it has ended,
+    // what it came to.
+    const batch = latestBatch(all)
+    const receipt = batchReceipt(batch, act, tok)
+    const receiptLine = receipt ? (
+      <Text wrap="truncate-end">
+        <Text color={receipt.failed ? 'error' : 'success'}>{receipt.failed ? '✗ ' : '✓ '}</Text>
+        <Text dimColor>{receipt.text}</Text>
+      </Text>
+    ) : null
+    const nameCols = Math.min(30, Math.floor(W * 0.38))
+    const barCols = W - 2 - nameCols - 1 - DUR_COLS
+    const onAxis = batch.length >= 2 && barCols >= 8 ? batch.slice(-Math.min(MAX_LANES, Math.floor(rows / 3))) : []
+    const lanes: Lane[] = onAxis.map(a => {
+      const l = look(a.status)
+      const name = fit(oneLine(a.description || a.type), nameCols)
+      return {
+        name: name + ' '.repeat(Math.max(0, nameCols - cols(name))), mark: l.mark, color: l.color ?? '', dim: !!l.dim,
+        from: a.firstSeen, to: a.status === 'running' ? null : (a.endedAt ?? a.firstSeen),
+      }
+    })
+    const axisTitle = ` timeline${onAxis.length < batch.length ? ` · latest ${onAxis.length} of ${batch.length}` : ''} `
+    const axis = lanes.length ? (
+      <Box flexDirection="column" flexShrink={0} marginTop={1}>
+        <Text dimColor wrap="truncate-end">{`──${axisTitle}${'─'.repeat(Math.max(0, W - 2 - axisTitle.length))}`}</Text>
+        {Client ? (
+          <Client key="lanes" module="./lanes.tsx" props={{ lanes, now, bar: barCols }} />
+        ) : (
+          laneRows(lanes, now, barCols).map((g, i) => (
+            <Text wrap="truncate-end">
+              <Text color={lanes[i]!.color || undefined} dimColor={lanes[i]!.dim}>{`${lanes[i]!.mark} `}</Text>
+              <Text>{lanes[i]!.name}</Text>
+              <Text dimColor>{` ${'·'.repeat(g.before)}`}</Text>
+              <Text color={lanes[i]!.color || undefined} dimColor={lanes[i]!.dim}>{'━'.repeat(g.bar)}</Text>
+              <Text dimColor>{`${'·'.repeat(g.after)}${fmtDuration(g.ms).padStart(DUR_COLS)}`}</Text>
+            </Text>
+          ))
+        )}
+        {receiptLine}
+      </Box>
+    ) : receiptLine ? (
+      <Box flexShrink={0} marginTop={1}>
+        {receiptLine}
+      </Box>
+    ) : null
+    const mark = (a: Agent) => (viewed === a.id ? ' ◂ main view' : '')
+    const counts = <Box key="counts">
+      <Text dimColor>{runningCount ? `${runningCount} running` : ''}</Text>
+      <Text dimColor>{runningCount && doneCount ? ' · ' : ''}</Text>
+      {doneCount ? (
+        <Button key="toggle-done" label={hidingDone ? `${doneCount} done (show)` : `${doneCount} done`} plain dimColor hover={{ color: 'claude', underline: true }} onPress={() => update($, hideDone, v => !v)} />
+      ) : null}
+    </Box>
+
+    // Above the prompt (no fullscreen to dock in): a summary of at most INLINE_ROWS rows.
+    if (inline) {
+      const live = [...running.flatMap(g => [g.agent, ...g.kids.map(k => k.agent)])].filter(a => a.status === 'running')
+      const SHOW = INLINE_ROWS - 3
+      const ended = (s2: string) => all.filter(a => a.status === s2).length
+      const tally = ['completed', 'failed', 'killed'].map(s2 => (ended(s2) ? `${look(s2).mark} ${ended(s2)} ${look(s2).word.toLowerCase()}` : '')).filter(Boolean)
+      return (
+        <Box flexDirection="column" width={W}>
+          {header(
+            <Text>
+              <Text color="claude">✻ </Text>
+              <Text bold>Agents</Text>
+            </Text>,
+            <Box>
+              {counts}
+              <Text> </Text>
+              <Button key="collapse" label="▾ hide" dimColor onPress={() => foldAway($)} />
+            </Box>,
+          )}
+          {live.slice(0, SHOW).map(a => {
+            const room = Math.max(10, Math.floor(W * 0.45))
+            return (
+              <Box key={`row-${a.id}`} width={W} justifyContent="space-between">
+                <Box>
+                  <Text color="claude">⏺ </Text>
+                  <Button key={`agent-${a.id}`} label={fit(nameOf(a, room), room)} plain hover={{ color: 'claude', underline: true }} onPress={() => goTo(a.id)} />
+                  <Text dimColor wrap="truncate-end">{act[a.id] ? `  ⎿ ${fit(act[a.id]!.text, Math.max(6, W - room - 14))}` : ''}</Text>
+                </Box>
+                {clock(a)}
+              </Box>
+            )
+          })}
+          {live.length > SHOW ? <Text dimColor>{`  +${live.length - SHOW} more running`}</Text> : null}
+          {receiptLine ?? (tally.length || loopsLine ? <Text dimColor wrap="truncate-end">{[tally.join(' · '), loopsLine.replace('⏺ ', '')].filter(Boolean).join(' · ')}</Text> : null)}
+          {shown.length ? null : <Text dimColor>No agents yet.</Text>}
+        </Box>
+      )
     }
     const agentBlock = (a: Agent, depth: number) => {
       const pad = '    '.repeat(depth)
@@ -716,10 +959,12 @@ export const register: Register = on => {
       const doing = act[a.id]
       const used = tok[a.id]
       const t = elapsed(a, now)
+      const model = prettyModel(a.model)
       const lines: RenderChildren[] = [
         <Box key={`row-${a.id}`}>
           <Text color={l.color} dimColor={l.dim}>{`${pad}⏺ `}</Text>
-          <Button key={`agent-${a.id}`} label={fit(nameOf(a, W), W - cols(pad) - 2)} plain hover={{ color: 'claude', underline: true }} onPress={() => goTo(a.id)} />
+          <Button key={`agent-${a.id}`} label={fit(nameOf(a, W), W - cols(pad) - 2 - cols(mark(a)))} plain hover={{ color: 'claude', underline: true }} onPress={() => goTo(a.id)} />
+          <Text color="claude">{mark(a)}</Text>
         </Box>,
       ]
       if (a.status === 'running') {
@@ -727,21 +972,13 @@ export const register: Register = on => {
           lines.push(<Text dimColor wrap="truncate-end">{`${pad}  ⎿  ${fit(doing.text, W)}`}</Text>)
           if (doing.tools > 1) lines.push(<Text dimColor>{`${pad}     +${doing.tools - 1} more tool use${doing.tools === 2 ? '' : 's'}`}</Text>)
         }
-        const detail = [t, used ? `${fmtTokens(used.input)} in` : '', used ? `${fmtTokens(used.output)} out` : ''].filter(Boolean).join(' · ')
+        lines.push(liveLine(a, pad, [model, used ? `${fmtTokens(used.input)} in` : '', used ? `${fmtTokens(used.output)} out` : ''].filter(Boolean).join(' · ')))
+      } else {
+        const detail = [doing ? uses(doing.tools) : '', used ? `${fmtTokens(used.input + used.output)} tokens` : '', model, t].filter(Boolean).join(' · ')
         lines.push(
           <Text wrap="truncate-end">
-            <Text color="claude">{`${pad}  ${spin} `}</Text>
-            {shimmer('Running…', step).map(part => (
-              <Text color={part.lit ? 'claudeShimmer' : 'claude'}>{part.text}</Text>
-            ))}
-            <Text dimColor>{detail ? ` (${detail})` : ''}</Text>
-          </Text>,
-        )
-      } else {
-        const detail = [doing ? uses(doing.tools) : '', used ? `${fmtTokens(used.input + used.output)} tokens` : '', t].filter(Boolean).join(' · ')
-        lines.push(
-          <Text color={a.status === 'failed' ? 'error' : undefined} dimColor={a.status !== 'failed'} wrap="truncate-end">
-            {`${pad}  ⎿  ${l.word}${detail ? ` (${detail})` : ''}`}
+            <Text color={a.status === 'failed' ? 'error' : undefined} dimColor={a.status !== 'failed'}>{`${pad}  ⎿  ${l.word}${detail ? ` (${detail})` : ''}`}</Text>
+            {alertOf(a) ? <Text color="error">{` · ${alertOf(a)}`}</Text> : null}
           </Text>,
         )
       }
@@ -761,19 +998,21 @@ export const register: Register = on => {
               <Text color="claude">✻ </Text>
               <Text bold>Agents</Text>
             </Text>,
-            <Box key="counts">
-              <Text dimColor>{runningCount ? `${runningCount} running` : ''}</Text>
-              <Text dimColor>{runningCount && doneCount ? ' · ' : ''}</Text>
-              {doneCount ? (
-                <Button key="toggle-done" label={hidingDone ? `${doneCount} done (show)` : `${doneCount} done`} plain dimColor hover={{ color: 'claude', underline: true }} onPress={() => update($, hideDone, v => !v)} />
-              ) : null}
-            </Box>,
+            counts,
           )}
           {shown.length ? null : <Text dimColor>No agents yet. They show here while they run.</Text>}
           {running.map(group)}
           {finished.map(group)}
+          {loopsLine ? (
+            <Box marginTop={1}>
+              <Text dimColor wrap="truncate-end">{loopsLine}</Text>
+            </Box>
+          ) : null}
         </Box>
-        {hint(shown.length ? `click an agent to open it${doneCount ? ' · click "done" to hide finished ones' : ''}` : '')}
+        <Box flexDirection="column" flexShrink={0}>
+          {axis}
+          {hint(shown.length ? `click an agent to open it${doneCount ? ' · click "done" to hide finished ones' : ''}` : '')}
+        </Box>
       </Box>,
     )
   })
@@ -787,13 +1026,12 @@ export const register: Register = on => {
     // when the tab comes or goes.
     const below = await next(e).catch(() => null)
     if (!(await read($, tab))) return <Box flexDirection="column">{below}</Box>
-    const spin = SPIN[(await read($, tick)) % SPIN.length] ?? '✻'
     const all = await read($, agents)
     const count = (s: string) => all.filter(a => a.status === s).length
     const running = count('running')
     const label = [
       '◂ Agents',
-      running ? `${spin} ${running}` : '',
+      running ? `${look('running').mark} ${running}` : '',
       ...['completed', 'failed', 'killed'].map(s => (count(s) ? `${look(s).mark} ${count(s)}` : '')),
     ].filter(Boolean).join(' ')
     return (

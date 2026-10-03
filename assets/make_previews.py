@@ -75,7 +75,7 @@ def scene(name, left, pane, split, cols=112, rows=24):
         items += runs(split + 1, mid + i, [(g, 'dim')])
     items += runs(cols - 2, 0, [('×', 'dim')])
     for r, parts in enumerate(pane):
-        items += runs(split + 3, r, parts)
+        items += runs(split + 3, r, clip(parts, cols - split - 5))
     items.append(hline(0, cols, rows - 2))
     items += runs(1, rows - 1, [('>', 'fg', 1)])
     items.append(f'<rect x="{PAD + 3 * CW:.1f}" y="{PAD + (rows - 1) * LH + 2}" width="{CW:.1f}" height="16" fill="{C["fg"]}" opacity="0.7"/>')
@@ -95,30 +95,41 @@ TRANSCRIPT = [
     [('  ⎿  ', 'dim'), ('Done (9 tool uses · 188k tokens · 2m 3s)', 'dim')],
 ]
 
+def lane(mark, color, name, before, bar, after, took):
+    """One row of the timeline, as the pane lays it out at 61 columns: a 23-column name, a 27-cell axis."""
+    return [(mark + ' ', color), (name.ljust(23), 'fg'), (' ' + '·' * before, 'dim'), ('━' * bar, color), ('·' * after + took.rjust(8), 'dim')]
+
+
 LIST = [
     [('✻ ', 'claude'), ('Agents', 'fg', 1), ('               2 running · 1 done', 'dim')],
     [],
     [('⏺ ', 'claude'), ('general-purpose(Refactor the parser)', 'fg')],
     [('  ⎿  ', 'dim'), ('Bash(npm test -- parser)', 'dim')],
     [('     +6 more tool uses', 'dim')],
-    [('  ✶ ', 'claude'), ('Run', 'claude'), ('nin', 'shimmer'), ('g…', 'claude'), (' (1m 12s · 412k in · 1.9k out)', 'dim')],
+    [('  ✶ ', 'claude'), ('Run', 'claude'), ('nin', 'shimmer'), ('g…', 'claude'), (' (1m 12s · Opus 5.5 · 412k in · 1.9k out)', 'dim')],
     [],
-    [('⏺ ', 'claude'), ('Explore(Find every caller of parse())', 'fg')],
+    [('⏺ ', 'claude'), ('Explore(Find every caller of parse())', 'fg'), (' ◂ main view', 'claude')],
     [('  ⎿  ', 'dim'), ('Grep(parse\\()', 'dim')],
     [('     +2 more tool uses', 'dim')],
-    [('  ✶ ', 'claude'), ('Running…', 'claude'), (' (24s · 61k in · 540 out)', 'dim')],
+    [('  ✶ ', 'claude'), ('Running…', 'claude'), (' (24s · Haiku 4.5 · 61k in · 540 out)', 'dim')],
     [],
     [('⏺ ', 'ok'), ('Plan(Draft the migration)', 'fg')],
-    [('  ⎿  Done (9 tool uses · 188k tokens · 2m 3s)', 'dim')],
-    [], [], [], [], [], [],
+    [('  ⎿  Done (9 tool uses · 188k tokens · Sonnet 5.5 · 2m 3s)', 'dim')],
+    [],
+    [('⏺ 1 other model loop (workflow agents or forks) · 4 requests · 52k in', 'dim')],
+    [],
+    [('── timeline ' + '─' * 49, 'dim')],
+    lane('✓', 'ok', 'Draft the migration', 0, 24, 3, '2m 3s'),
+    lane('✻', 'claude', 'Refactor the parser', 13, 14, 0, '1m 12s'),
+    lane('✻', 'claude', 'Find every caller of p…', 22, 5, 0, '24s'),
     [('click an agent to open it', 'dim')],
 ]
-scene('pane.svg', TRANSCRIPT[:8] + [[]] * 0, LIST, split=60)
+scene('pane.svg', TRANSCRIPT[:8], LIST, split=60, cols=126)
 
 CONVERSATION = [
-    [('← ', 'dim'), ('⏺ ', 'claude'), ('general-purpose', 'fg', 1), ('(Refactor the parser)', 'fg'), ('     [ ■ Stop ]', 'dim')],
-    [('  ⎿  Running · 7 tool uses · 1m 12s', 'dim')],
-    [('     412k in (398k cached) · 1.9k out · context 64k', 'dim')],
+    [('← ', 'dim'), ('⏺ ', 'claude'), ('general-purpose', 'fg', 1), ('(Refactor the parser)', 'fg'), ('  1m 12s ', 'dim'), ('[ ■ Stop ]', 'dim')],
+    [('  ⎿  Running · 7 tool uses · Opus 5.5', 'dim')],
+    [('     412k in (398k cached) · 1.9k out · context 64k · 8 requests', 'dim')],
     [],
     [('> Refactor src/parser.ts into a tokenizer and a', 'dim')],
     [('  parser, keep the public API, update the tests…', 'dim')],

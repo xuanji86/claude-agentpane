@@ -13,6 +13,8 @@ export type AgentpaneAgent = {
   seenRunning: boolean
   /** When the pane first saw it done; absent while it runs, or when it was done before the pane saw it. */
   endedAt?: number
+  /** The model it runs on, as its spawn reported it; absent for an agent spawned before the pane loaded. */
+  model?: string
 }
 
 /** The tokens an agent's responses used, summed as the API reported them. */
@@ -25,7 +27,12 @@ export type AgentpaneTokens = {
   /** Its latest request's input and output: how full its context is. */
   context: number
   requests: number
+  /** Responses cut off at the output limit (`max_tokens`). */
+  truncated?: number
 }
+
+/** A model loop no listed agent claims: a workflow's agent, a compaction or memory fork. */
+export type AgentpaneLoop = { firstSeen: number; lastSeen: number; requests: number }
 
 /** What an agent is doing: its latest tool call, and how many it has made. */
 export type AgentpaneActivity = { text: string; tools: number }
@@ -36,16 +43,13 @@ declare module 'claude-code' {
       agents: AgentpaneAgent[]
       activity: Record<string, AgentpaneActivity>
       tokens: Record<string, AgentpaneTokens>
+      loops: Record<string, AgentpaneLoop>
       /** The agent whose conversation the pane shows; null for the list. */
       viewing: string | null
       /** The block scrolled back to, drawn at the top; null follows the conversation live. */
       scrollTop: number | null
       /** Bumped when the conversation in view grows, so the pane draws it again. */
       rev: number
-      /** Bumped each second while agents run: the clocks move. */
-      tick: number
-      /** Bumped five times a second while the list shows a running agent: its spinner and shimmer move. */
-      frame: number
       /** The agent whose Stop was pressed once: the next press stops it. */
       confirmStop: string | null
       /** The list shows running agents only. */

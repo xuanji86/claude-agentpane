@@ -15,7 +15,15 @@ const BAND = {
 type World = {
   agents: { id: string; description: string; type: string; status: string }[]; panes: string[]; opened: number; closed: number
   widths?: (number | undefined)[]; focus?: (boolean | undefined)[]; toasts?: string[]; tools?: { tool: string; task_id?: string; consent?: string }[]
-  placed?: boolean; stopAnswer?: object; messages?: object[]
+  placed?: boolean; stopAnswer?: object; messages?: object[]; stopReason?: string; rows?: (number | undefined)[]; status?: (string | undefined)[]
+}
+
+// All the text a drawing holds, in order.
+const textOf = (node: unknown): string => {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (!node || typeof node !== 'object') return ''
+  const n = node as { children?: unknown[]; props?: { children?: unknown; label?: string } }
+  return [n.props?.label ?? '', ...(n.children ?? []).map(textOf)].join('')
 }
 
 // The engine beneath a started session: the agent list, the panes, and one agent's conversation.
@@ -23,7 +31,8 @@ const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, 
   on('command.register', () => ({ value: { command: 'agentpane' } }))
   on('agent.list', () => ({ value: world.agents }) as never)
   on('ui.panes', () => ({ value: world.panes.map(id => ({ id, title: 'Agents', isShown: true, isFocused: false, isPlaced: world.placed ?? true })) }))
-  on('ui.open', ($, e) => (world.opened++, world.panes = [e.id], (world.widths ??= []).push(e.columns), (world.focus ??= []).push(e.focus), { value: { isPlaced: true } }) as never)
+  on('ui.open', ($, e) => (world.opened++, world.panes = [e.id], (world.widths ??= []).push(e.columns), (world.focus ??= []).push(e.focus), (world.rows ??= []).push(e.rows), { value: { isPlaced: true } }) as never)
+  on('agent.spawn', ($, e) => ({ model: 'claude-sonnet-5-5', agentId: `sp-${(e as { description: string }).description.replace(/\W+/g, '-')}` }) as never)
   on('ui.close', () => (world.closed++, world.panes = [], { value: undefined }))
   on('session.messages', () => ({
     value: world.messages ?? [
@@ -36,9 +45,10 @@ const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, 
     (e as { tool: string }).tool === 'TaskStop' && world.stopAnswer ? world.stopAnswer : { result: { stdout: '', stderr: '', interrupted: false } }
   ) as never)
   on('ui.toast', ($, e) => ((world.toasts ??= []).push(String((e as { text?: string }).text ?? e)), { value: undefined }) as never)
+  on('ui.status', ($, e) => ((world.status ??= []).push((e as { text?: string }).text), { value: undefined }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.step', async function* () {
-    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: { model: 'm', input_tokens: 10, output_tokens: 1_200, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0 } }
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: world.stopReason ?? 'tool_use', usage: { model: 'm', input_tokens: 10, output_tokens: 1_200, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0 } }
   } as never)
   // nothing else in the band beneath
   on('ui.render', { component: 'AbovePrompt' }, $ => {
@@ -64,7 +74,8 @@ test('a running agent opens the pane, lists what it does, and the pane folds onc
   const ui = await $.ui.mount(PANE)
   expect(await ui.find({ type: 'Text', text: /1 running/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /⎿ {2}Bash\(ls hooks\)$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\(\d+s · 40k in · 1\.2k out\)$/ })).toBeDefined()
+  const live = await ui.find({ type: 'Client' } as never)
+  expect((live as unknown as { props: { props: { detail: string } } }).props.props.detail).toBe('40k in · 1.2k out')
   world.agents = [{ ...world.agents[0]!, status: 'completed' }]
   await clock.advance(5_000)
   expect(world.closed).toBe(0)
@@ -364,4 +375,193 @@ test('the tab counts failed agents apart from the ones that succeeded', async ($
   expect(await band.find({ type: 'Button', text: /✓ 1 ✗ 1/ })).toBeDefined()
   await pane.unmount()
   await band.unmount()
+})
+
+const step = async ($: { turn: { step: (e: never) => AsyncIterable<unknown> } }, agentId: string) => {
+  for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'm', messageCount: 1, agentId } as never)) void _
+}
+const spawnOne = ($: { agent: { spawn: (e: never) => Promise<unknown> } }, description: string) =>
+  $.agent.spawn({ tool_use_id: `t-${description}`, prompt: 'p', description, subagentType: 'Explore', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5' } as never)
+
+test('a spawned agent is listed at once with its model, before the next poll', async ($, on) => {
+  mock.clock(on)
+  const world: World = { agents: [], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await spawnOne($, 'look around')
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Button', text: /Explore\(look around\)/ })).toBeDefined()
+  const live = (await ui.find({ type: 'Client' } as never)) as unknown as { props: { props: { detail: string } } }
+  expect(live.props.props.detail).toContain('Sonnet 5.5')
+  await ui.unmount()
+})
+
+test('the live line counts on by itself on the surface clock, the pane not redrawn', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  const first = textOf(await ui.drawn({ in: 'live-a1' }))
+  expect(first).toContain('Running…')
+  await (ui as unknown as { advance: (ms: number) => Promise<void> }).advance(3_000) // the surface clock alone
+  const later = textOf(await ui.drawn({ in: 'live-a1' }))
+  expect(later).not.toBe(first)
+  expect(later).toMatch(/\(3s/)
+  await ui.unmount()
+})
+
+test('a response cut at max_tokens is flagged on the agent', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0, stopReason: 'max_tokens' }
+  await start($, on, world)
+  await clock.advance(1_000)
+  await step($, 'a1')
+  const ui = await $.ui.mount(PANE)
+  const live = (await ui.find({ type: 'Client' } as never)) as unknown as { props: { props: { alert: string } } }
+  expect(live.props.props.alert).toBe('max_tokens ×1')
+  await ui.unmount()
+})
+
+test('model loops no agent claims are counted under the list', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  await step($, 'wf-1')
+  await step($, 'wf-1')
+  await step($, 'wf-2')
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: /2 other model loops \(workflow agents or forks\) · 3 requests/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the agent open in the main view is marked in the list', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1'), running('a2')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const viewing = { ...(PANE as object), props: { ...(PANE as { props: object }).props, view: { agentId: 'a2' } } } as never
+  const ui = await $.ui.mount(viewing)
+  const marks = await ui.findAll({ type: 'Text', text: /◂ main view/ })
+  expect(marks.length).toBe(1)
+  await ui.unmount()
+})
+
+test('above the prompt, the pane is a summary of at most eight rows', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: Array.from({ length: 7 }, (_, i) => running(`r${i}`)), panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  const inline = { ...(PANE as object), props: { ...(PANE as { props: object }).props, placement: 'inline', bodyColumns: 90 }, viewport: { columns: 160, rows: 40, isFullscreen: false } } as never
+  const ui = await $.ui.mount(inline)
+  await clock.advance(1_000)
+  expect(world.rows?.at(-1)).toBe(8) // it asked for a summary's rows
+  const root = (await ui.drawn()) as { children?: unknown[] }
+  expect((root.children ?? []).filter(Boolean).length).toBeLessThanOrEqual(8)
+  expect(await ui.find({ type: 'Text', text: /\+2 more running/ })).toBeDefined()
+  await ui.press({ key: 'collapse' })
+  expect(world.panes).toEqual([])
+  await ui.unmount()
+})
+
+test('with autoOpen off, an agent does not open the pane', { options: { autoOpen: false } }, async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(3_000)
+  expect(world.opened).toBe(0)
+})
+
+test('with foldAfter 0 and toasts off, the pane stays open and says nothing', { options: { foldAfter: 0, toasts: false } }, async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(2_000)
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }]
+  await clock.advance(60_000)
+  expect(world.closed).toBe(0)
+  expect(world.toasts ?? []).toEqual([])
+})
+
+test('the list and a conversation draw on every surface and width', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1'), { ...running('a2'), status: 'completed' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    for (const cols of [40, 60, 86, 120]) {
+      const mount = { ...(PANE as object), surface, props: { ...(PANE as { props: object }).props, bodyColumns: cols } } as never
+      const ui = await $.ui.mount(mount)
+      expect(await ui.find({ type: 'Text', text: /^Agents$/ })).toBeDefined()
+      await ui.press({ key: 'agent-a1' })
+      expect(await ui.find({ type: 'Markdown', text: /Looking now/ } as never)).toBeDefined()
+      await ui.press({ key: 'back' })
+      await ui.unmount()
+    }
+  }
+})
+
+test('two agents run on one time axis that grows on the surface clock, and the batch ends with its receipt', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1', 'map the hooks'), running('a2', 'count the tests')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: /timeline/ })).toBeDefined()
+  const first = textOf(await ui.drawn({ in: 'lanes' }))
+  expect(first).toContain('map the hooks')
+  expect(first).toContain('━')
+  await (ui as unknown as { advance: (ms: number) => Promise<void> }).advance(3_000) // the surface clock alone
+  expect(textOf(await ui.drawn({ in: 'lanes' }))).toMatch(/3s/)
+  await clock.advance(3_000)
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }, running('a2', 'count the tests')]
+  await clock.advance(1_000) // a1 ran 1s to 5s
+  expect(await ui.find({ type: 'Text', text: /agents in/ })).toBeUndefined() // not while one runs
+  world.agents = world.agents.map(a => ({ ...a, status: 'completed' }))
+  await clock.advance(1_000) // a2 ran 1s to 6s
+  expect(await ui.find({ type: 'Text', text: /^2 agents in 5s · 9s of agent time \(1\.8× in parallel\)$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('where a surface has no clock of its own, the time axis is drawn still', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1'), running('a2')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  for (const surface of ['vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...(PANE as object), surface } as never)
+    expect(await ui.find({ type: 'Client' } as never)).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^━+$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /✻ Running…/ })).toBeDefined() // and the live line too
+    await ui.unmount()
+  }
+})
+
+test('while the pane is not on screen, the status line counts the running agents, and clears when they are done', { options: { autoOpen: false } }, async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1'), running('a2')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  expect(world.status).toEqual(['✻ 2 agents running'])
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }, world.agents[1]!]
+  await clock.advance(1_000)
+  world.agents = world.agents.map(a => ({ ...a, status: 'completed' }))
+  await clock.advance(1_000)
+  expect(world.status).toEqual(['✻ 2 agents running', '✻ 1 of 2 agents running', undefined])
+})
+
+test('with the pane on screen, or the status line turned off, there is no status line', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(3_000)
+  expect(world.opened).toBe(1)
+  expect(world.status).toEqual([undefined]) // cleared once, never set
+})
+
+test('with statusLine off, a folded pane leaves the status line alone', { options: { statusLine: false, autoOpen: false } }, async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(3_000)
+  expect(world.status).toEqual([undefined])
 })
