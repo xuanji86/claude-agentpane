@@ -8,6 +8,8 @@ Claude Code 会话派出的每个 subagent、它此刻在做什么、用了多�
 [![Version](https://img.shields.io/badge/version-1.1.1-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
 [![Claude Code mod](https://img.shields.io/badge/Claude%20Code-mod-c678dd.svg)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4eba65.svg)](LICENSE)
+[![reach](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-reach.svg)](https://github.com/karanb192/awesome-claude-code-mods)
+[![validates](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-validates.svg)](https://github.com/karanb192/awesome-claude-code-mods)
 
 [English](README.md) · **中文**（界面为英文）
 
