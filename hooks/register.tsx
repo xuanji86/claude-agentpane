@@ -195,7 +195,7 @@ export const mergeAgents = (before: readonly Agent[], list: readonly AgentInfo[]
       id: info.id, description: info.description, type: info.type, status: info.status,
       ...(info.name && { name: info.name }), ...(info.parentId && { parentId: info.parentId }),
       firstSeen: resumed ? now : (old?.firstSeen ?? now), seenRunning, ...(endedAt !== undefined && { endedAt }),
-      ...(old?.model && { model: old.model }),
+      ...(old?.model && { model: old.model }), ...(old?.effort !== undefined && { effort: old.effort }),
     }
   })
   return [...merged, ...pending]

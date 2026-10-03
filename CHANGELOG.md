@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.3 — 2026-10-03
+
+- **Effort stays shown:** 1.1.2 recorded an agent's thinking effort, but the once-a-second list sync rebuilt the record
+  without it, so it vanished within a second; the sync now keeps it, like the model.
+
 ## 1.1.2 — 2026-10-03
 
 - **Model and effort from the requests:** each agent shows the model and thinking effort its requests actually use

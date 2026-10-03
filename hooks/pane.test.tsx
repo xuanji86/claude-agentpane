@@ -397,11 +397,14 @@ test('a spawned agent is listed at once with its model, before the next poll', a
 })
 
 test('the model and effort its requests name show, the model winning over the spawn alias', async ($, on) => {
-  mock.clock(on)
+  const clock = mock.clock(on)
   const world: World = { agents: [], panes: [], opened: 0, closed: 0 }
   await start($, on, world)
   await spawnOne($, 'look around') // the spawn reports claude-sonnet-5-5
   for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'claude-opus-5-5[1m]', effort: 'xhigh', messageCount: 1, agentId: 'sp-look-around' } as never)) void _
+  // the engine's list now shows it, and the once-a-second sync rebuilds its record: model and effort must survive
+  world.agents = [{ id: 'sp-look-around', description: 'look around', type: 'Explore', status: 'running' }]
+  await clock.advance(1_000)
   const ui = await $.ui.mount(PANE)
   const live = (await ui.find({ type: 'Client' } as never)) as unknown as { props: { props: { detail: string } } }
   expect(live.props.props.detail).toMatch(/^Opus 5\.5 \(1M\) · xhigh · /)
