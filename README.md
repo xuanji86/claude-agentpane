@@ -8,7 +8,6 @@ Every subagent a Claude Code session runs, what it is doing right now, what it c
 [![Version](https://img.shields.io/badge/version-1.1.1-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
 [![Claude Code mod](https://img.shields.io/badge/Claude%20Code-mod-c678dd.svg)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4eba65.svg)](LICENSE)
-[![reach](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-reach.svg)](https://github.com/karanb192/awesome-claude-code-mods)
 [![validates](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-validates.svg)](https://github.com/karanb192/awesome-claude-code-mods)
 
 **English** · [中文](README.zh-CN.md)
@@ -111,6 +110,10 @@ In `/config`, or under `pluginConfigs["agentpane"].options` in `settings.json`:
 | `statusLine` | `true` | the running agents under the prompt while the pane is not on screen |
 
 ## What it can reach
+
+Its footprint, as the [awesome-claude-code-mods](https://github.com/karanb192/awesome-claude-code-mods) scan reads it from `claude plugin validate`:
+
+[![reach](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-reach.svg)](https://github.com/karanb192/awesome-claude-code-mods)
 
 agentpane watches, and acts only when you press Stop. Every hook passes its event on unchanged.
 
