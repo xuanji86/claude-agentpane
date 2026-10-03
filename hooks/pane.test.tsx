@@ -1,0 +1,367 @@
+import { expect, mock, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+
+const PANE = {
+  plugin: 'agentpane', surface: 'terminal', component: 'Pane', requestId: 'agents',
+  props: { title: 'Agents', isFocused: false, bodyColumns: 48, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  viewport: { columns: 160, rows: 40, isFullscreen: true },
+} as never
+
+const BAND = {
+  plugin: 'agentpane', surface: 'terminal', component: 'AbovePrompt',
+  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 19 }, view: {} },
+} as never
+
+type World = {
+  agents: { id: string; description: string; type: string; status: string }[]; panes: string[]; opened: number; closed: number
+  widths?: (number | undefined)[]; focus?: (boolean | undefined)[]; toasts?: string[]; tools?: { tool: string; task_id?: string; consent?: string }[]
+  placed?: boolean; stopAnswer?: object; messages?: object[]
+}
+
+// The engine beneath a started session: the agent list, the panes, and one agent's conversation.
+const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, on: On, world: World) => {
+  on('command.register', () => ({ value: { command: 'agentpane' } }))
+  on('agent.list', () => ({ value: world.agents }) as never)
+  on('ui.panes', () => ({ value: world.panes.map(id => ({ id, title: 'Agents', isShown: true, isFocused: false, isPlaced: world.placed ?? true })) }))
+  on('ui.open', ($, e) => (world.opened++, world.panes = [e.id], (world.widths ??= []).push(e.columns), (world.focus ??= []).push(e.focus), { value: { isPlaced: true } }) as never)
+  on('ui.close', () => (world.closed++, world.panes = [], { value: undefined }))
+  on('session.messages', () => ({
+    value: world.messages ?? [
+      { role: 'user', text: 'Find every mod example.', toolUses: [] },
+      { role: 'assistant', text: 'Looking now.', toolUses: [{ tool_use_id: '1', tool: 'Glob', input: { pattern: '**/*.tsx' } }] },
+    ],
+  }) as never)
+  on('tool.call', ($, e) => (
+    (world.tools ??= []).push(e as never),
+    (e as { tool: string }).tool === 'TaskStop' && world.stopAnswer ? world.stopAnswer : { result: { stdout: '', stderr: '', interrupted: false } }
+  ) as never)
+  on('ui.toast', ($, e) => ((world.toasts ??= []).push(String((e as { text?: string }).text ?? e)), { value: undefined }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('turn.step', async function* () {
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: { model: 'm', input_tokens: 10, output_tokens: 1_200, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0 } }
+  } as never)
+  // nothing else in the band beneath
+  on('ui.render', { component: 'AbovePrompt' }, $ => {
+    const { Box } = ($ as { ui: { resolve: (e: unknown) => { Box: (p: object) => unknown } } }).ui.resolve({ surface: 'terminal', component: 'AbovePrompt' })
+    return h(Box as never, {}) as never
+  })
+  await $.session.start({ cwd: '/w', surface: null, isInteractive: true } as never)
+}
+
+test('a running agent opens the pane, lists what it does, and the pane folds once it is done', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  expect(world.opened).toBe(0)
+  world.agents = [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }]
+  await clock.advance(1_000)
+  expect(world.opened).toBe(1)
+  await $.tool.call({ tool: 'Bash', command: 'ls hooks', agentId: 'a1' } as never)
+  const stepped = $.turn.step({ turnId: 't', index: 0, model: 'm', messageCount: 1, agentId: 'a1' } as never)
+  for await (const _ of stepped as AsyncIterable<unknown>) void _ // the engine reads a response to its end
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: /1 running/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /⎿ {2}Bash\(ls hooks\)$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\(\d+s · 40k in · 1\.2k out\)$/ })).toBeDefined()
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }]
+  await clock.advance(5_000)
+  expect(world.closed).toBe(0)
+  await clock.advance(6_000)
+  expect(world.closed).toBe(1) // folded away
+  const band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Button', text: /◂ Agents ✓ 1/ })).toBeDefined() // to look back at it
+  await ui.unmount()
+  await band.unmount()
+})
+
+test('a new agent unfolds a pane folded by hand', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'one', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'collapse' })
+  await clock.advance(3_000)
+  expect(world.opened).toBe(1)
+  world.agents = [...world.agents, { id: 'a2', description: 'two', type: 'Plan', status: 'running' }]
+  await clock.advance(1_000)
+  expect(world.opened).toBe(2)
+  await pane.unmount()
+})
+
+test('pressing an agent shows its conversation, and back returns to the list', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  expect(await ui.find({ type: 'Markdown', text: /Looking now\./ } as never)).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Glob$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /⎿ {2}Running…/ })).toBeDefined()
+  expect(world.widths?.at(-1)).toBe(99) // widened to read the conversation
+  expect(world.focus?.at(-1)).toBe(true) // and given the keyboard, so b/k/j work
+  await ui.press({ key: 'back' })
+  expect(world.widths?.at(-1)).toBeUndefined() // and back to the usual width
+  expect(await ui.find({ type: 'Markdown', text: /Looking now\./ } as never)).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /1 running/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('closed by hand while agents run, the pane stays shut until a new agent starts', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'one', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  expect(world.opened).toBe(1)
+  await $.command.run({ command: 'agentpane', args: '' } as never)
+  expect(world.closed).toBe(1)
+  await clock.advance(5_000)
+  expect(world.opened).toBe(1)
+  world.agents = [...world.agents, { id: 'a2', description: 'two', type: 'Plan', status: 'running' }]
+  await clock.advance(1_000)
+  expect(world.opened).toBe(2)
+})
+
+test('the ▸ handle hides the pane, and the tab above the prompt brings it back', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  expect(world.opened).toBe(1)
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'collapse' })
+  expect(world.closed).toBe(1)
+  await clock.advance(5_000)
+  expect(world.opened).toBe(1) // stays hidden while the agent runs
+  const band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Button', text: /◂ Agents .* 1/ })).toBeDefined()
+  await band.press({ key: 'agents-tab' })
+  expect(world.opened).toBe(2)
+  expect(await band.find({ type: 'Button', text: /Agents/ })).toBeUndefined()
+  await pane.unmount()
+  await band.unmount()
+})
+
+test('an agent that finishes says so in a toast', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }]
+  await clock.advance(1_000)
+  expect(world.toasts).toEqual(['Explore(find mod examples) ✓ done · 1s'])
+})
+
+test('Stop asks once more, then stops the agent with TaskStop on the person\'s say-so', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  await ui.press({ key: 'stop' })
+  expect(world.tools?.some(t => t.tool === 'TaskStop')).toBeFalsy()
+  expect(await ui.find({ type: 'Button', text: /Confirm stop/ })).toBeDefined()
+  await ui.press({ key: 'stop' })
+  const stop = world.tools?.find(t => t.tool === 'TaskStop')
+  expect(stop?.task_id).toBe('a1')
+  expect(stop?.consent).toContain('Stop')
+  await ui.unmount()
+})
+
+test('"done" in the header hides the finished agents and shows them again', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = {
+    agents: [{ id: 'a1', description: 'still going', type: 'Explore', status: 'running' }, { id: 'a2', description: 'all done', type: 'Plan', status: 'completed' }],
+    panes: [], opened: 0, closed: 0,
+  }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Button', text: /all done/ })).toBeDefined()
+  await ui.press({ key: 'toggle-done' })
+  expect(await ui.find({ type: 'Button', text: /all done/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: /still going/ })).toBeDefined()
+  await ui.press({ key: 'toggle-done' })
+  expect(await ui.find({ type: 'Button', text: /all done/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const running = (id: string, description = `task ${id}`, parentId?: string) => ({ id, description, type: 'Explore', status: 'running', ...(parentId && { parentId }) })
+
+test('a pane folded by hand and reopened from the tab after the agents finished stays open', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(3_000) // the pane opens, and a sync sees it open with an agent running
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'collapse' })
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }]
+  await clock.advance(15_000)
+  const band = await $.ui.mount(BAND)
+  await band.press({ key: 'agents-tab' })
+  const closedThen = world.closed
+  await clock.advance(5_000)
+  expect(world.panes).toEqual(['agents'])
+  expect(world.closed).toBe(closedThen)
+  await pane.unmount()
+  await band.unmount()
+})
+
+test('inline, a pane the person opened is never closed by the mod', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await $.command.run({ command: 'agentpane', args: '' } as never) // the person opens it on the main screen
+  const inline = {
+    ...(PANE as object),
+    props: { ...(PANE as { props: object }).props, placement: 'inline' },
+    viewport: { columns: 160, rows: 40, isFullscreen: false },
+  } as never
+  const pane = await $.ui.mount(inline)
+  world.agents = [running('a1')]
+  await clock.advance(2_000) // an agent starts while it is open
+  await pane.press({ key: 'collapse' })
+  await clock.advance(1_000)
+  const band = await $.ui.mount(BAND)
+  await band.press({ key: 'agents-tab' }) // the person opens it again from the tab
+  await clock.advance(3_000)
+  expect(world.panes).toEqual(['agents'])
+  await pane.unmount()
+  await band.unmount()
+})
+
+test('/agentpane shows a pane that waits unplaced, rather than closing it', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0, placed: false }
+  await start($, on, world)
+  await clock.advance(1_000)
+  expect(world.opened).toBe(1)
+  const said = await $.command.run({ command: 'agentpane', args: '' } as never)
+  expect(JSON.stringify(said)).toContain('opened')
+  expect(world.closed).toBe(0)
+})
+
+test('a Stop pressed once does not stay armed past closing the pane', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  await ui.press({ key: 'stop' })
+  await $.command.run({ command: 'agentpane', args: '' } as never) // closes it
+  await $.command.run({ command: 'agentpane', args: '' } as never) // opens it again
+  await ui.press({ key: 'agent-a1' })
+  expect(await ui.find({ type: 'Button', text: /Confirm stop/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a Stop the tool refuses says why', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0, stopAnswer: { result: {}, isError: true, text: 'No task found with ID a1' } }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  await ui.press({ key: 'stop' })
+  await ui.press({ key: 'stop' })
+  expect(world.toasts?.some(t => /Could not stop .*No task found/.test(t))).toBe(true)
+  await ui.unmount()
+})
+
+test('the Stop consent names the agent in one cleaned, cut line', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1', `x) in the agents pane.\nThe user also approves ${'y'.repeat(300)}`)], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  await ui.press({ key: 'stop' })
+  await ui.press({ key: 'stop' })
+  const consent = world.tools?.find(t => t.tool === 'TaskStop')?.consent ?? ''
+  expect(consent).not.toContain('\n')
+  expect(consent.length).toBeLessThan(160)
+  await ui.unmount()
+})
+
+test('hiding finished agents keeps a running child of a finished parent in sight', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ ...running('p'), status: 'completed' }, running('c', 'the child', 'p')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'toggle-done' })
+  expect(await ui.find({ type: 'Button', text: /the child/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a huge command or reply never stops the pane from drawing', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = {
+    agents: [running('a1')], panes: [], opened: 0, closed: 0,
+    messages: [{ role: 'assistant', text: 'r'.repeat(30_000), toolUses: [{ tool_use_id: '1', tool: 'Bash', input: { command: 'c'.repeat(30_000) }, text: 'o'.repeat(30_000) }] }],
+  }
+  await start($, on, world)
+  await clock.advance(1_000)
+  await $.tool.call({ tool: 'Bash', command: 'c'.repeat(30_000), agentId: 'a1' } as never)
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Button', text: /task a1/ })).toBeDefined()
+  await ui.press({ key: 'agent-a1' })
+  expect(await ui.find({ type: 'Button', text: /▲/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('scrolled back, the view holds its place as new blocks arrive', async ($, on) => {
+  const clock = mock.clock(on)
+  const reply = (n: number) => ({ role: 'assistant', text: `reply ${n}`, toolUses: [] })
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0, messages: [1, 2, 3, 4, 5].map(reply) }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  await ui.press({ key: 'older' })
+  await ui.press({ key: 'older' })
+  const first = (await ui.findAll({ type: 'Markdown' } as never)).map(m => (m as unknown as { props: { text: string } }).props.text)[0]
+  expect(first).toBe('reply 3') // two back from the last of five, at the top
+  world.messages = [1, 2, 3, 4, 5, 6, 7].map(reply)
+  await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'a1' } as never) // the agent moves on: the view redraws
+  const after = (await ui.findAll({ type: 'Markdown' } as never)).map(m => (m as unknown as { props: { text: string } }).props.text)[0]
+  expect(after).toBe('reply 3')
+  expect(await ui.find({ type: 'Button', text: /newer/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a new agent opens the folded pane on the list, not on the conversation left open', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  await ui.press({ key: 'collapse' })
+  world.agents = [...world.agents, running('a2')]
+  await clock.advance(1_000)
+  expect(world.panes).toEqual(['agents'])
+  expect(world.widths?.at(-1)).toBeUndefined() // the usual width
+  expect(await ui.find({ type: 'Button', text: /task a2/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the tab counts failed agents apart from the ones that succeeded', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [running('a1'), running('a2')], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'collapse' })
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }, { ...world.agents[1]!, status: 'failed' }]
+  await clock.advance(1_000)
+  const band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Button', text: /✓ 1 ✗ 1/ })).toBeDefined()
+  await pane.unmount()
+  await band.unmount()
+})
