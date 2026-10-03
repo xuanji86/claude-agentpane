@@ -5,7 +5,7 @@
 **See your subagents at work, beside the conversation.**<br>
 Every subagent a Claude Code session runs, what it is doing right now, what it costs in tokens, and its whole conversation one click away.
 
-[![Version](https://img.shields.io/badge/version-1.1.1-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
+[![Version](https://img.shields.io/badge/version-1.1.2-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
 [![Claude Code mod](https://img.shields.io/badge/Claude%20Code-mod-c678dd.svg)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4eba65.svg)](LICENSE)
 [![validates](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-validates.svg)](https://github.com/karanb192/awesome-claude-code-mods)
@@ -28,7 +28,7 @@ Code draws its own rows, and opens each one's conversation in place.
 | --- | --- |
 | **Live list** | `⏺ Type(description)`, the tool call it runs now, `+N more tool uses`, and `✶ Running… (1m 12s · Opus 5.5 · 412k in · 1.9k out)`; listed the moment it spawns |
 | **Nested agents** | An agent's own subagents sit indented under it |
-| **Tokens and model** | Input (cached share shown), output, context size and requests per agent, from the API's own usage figures; `max_tokens` in red when a response was cut off |
+| **Tokens, model and effort** | Input (cached share shown), output, context size and requests per agent, from the API's own usage figures; the model and thinking effort each agent's requests actually use; `max_tokens` in red when a response was cut off |
 | **Other loops** | Model loops no listed agent claims (a workflow's agents, compaction and memory forks), counted under the list |
 | **Timeline** | The latest batch of agents on one time axis, a bar each: what ran side by side, and what took longest |
 | **Batch receipt** | Once a batch ends: `✓ 4 agents in 31s · 1m 18s of agent time (2.5× in parallel) · 21 tool uses · 190k tokens` |

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2 — 2026-10-03
+
+- **Model and effort from the requests:** each agent shows the model and thinking effort its requests actually use
+  (`Opus 5.5 (1M) · xhigh`), so an agent spawned without a model (a forked skill such as `/code-review`, an inherited
+  model) shows one too, and a spawn alias (`sonnet`) reads as the real model.
+
 ## 1.1.1 — 2026-10-03
 
 - **Unfolds again:** a new agent unfolds a pane that folded after the last batch (1.1.0 listed agents at spawn, so none
