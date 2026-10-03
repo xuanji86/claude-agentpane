@@ -34,7 +34,7 @@ Claude 把活分给 subagent 时，终端里每个 agent 只有一行，外加�
 
 ## 安装
 
-需要支持 mod（函数 hooks）的 Claude Code 版本；侧边停靠需要 fullscreen 界面（`/tui fullscreen`）。
+需要 **Claude Code 2.1.287 或更高版本**（mod，即函数 hooks，从这个版本开始提供）；已在 2.1.288 上测试。侧边停靠需要 fullscreen 界面（`/tui fullscreen`）。mod 目前是早期功能，接口可能随版本变化，如果新版本导致 pane 失效，这里会发修复版。
 
 ```text
 /plugin marketplace add xuanji86/claude-agentpane

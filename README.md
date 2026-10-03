@@ -36,7 +36,9 @@ Code draws its own rows, and opens each one's conversation in place.
 
 ## Install
 
-Needs a Claude Code build with mods (function hooks), and the fullscreen layout (`/tui fullscreen`) for a side pane.
+Needs **Claude Code 2.1.287 or later**, the release that brought mods (function hooks); tested on 2.1.288. A side pane
+needs the fullscreen layout (`/tui fullscreen`). Mods are early access: their API may change between releases, and a
+release that breaks the pane gets a fix here.
 
 ```text
 /plugin marketplace add xuanji86/claude-agentpane
