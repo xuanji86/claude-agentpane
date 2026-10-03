@@ -1,6 +1,6 @@
 {
   "name": "agentpane",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A side pane for Claude Code that lists the subagents a session runs, what each is doing and what it costs in tokens, with each one's conversation a click away.",
   "author": {
     "name": "Anji Xu",

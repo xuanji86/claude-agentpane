@@ -5,7 +5,7 @@
 **See your subagents at work, beside the conversation.**<br>
 Every subagent a Claude Code session runs, what it is doing right now, what it costs in tokens, and its whole conversation one click away.
 
-[![Version](https://img.shields.io/badge/version-1.1.0-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
+[![Version](https://img.shields.io/badge/version-1.1.1-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
 [![Claude Code mod](https://img.shields.io/badge/Claude%20Code-mod-c678dd.svg)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4eba65.svg)](LICENSE)
 

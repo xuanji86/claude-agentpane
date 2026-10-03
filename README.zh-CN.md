@@ -5,7 +5,7 @@
 **在对话旁边看着你的 subagent 干活。**<br>
 Claude Code 会话派出的每个 subagent、它此刻在做什么、用了多少 token，点一下就能看它的完整对话。
 
-[![Version](https://img.shields.io/badge/version-1.1.0-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
+[![Version](https://img.shields.io/badge/version-1.1.1-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
 [![Claude Code mod](https://img.shields.io/badge/Claude%20Code-mod-c678dd.svg)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4eba65.svg)](LICENSE)
 

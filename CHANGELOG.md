@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.1 — 2026-10-03
+
+- **Unfolds again:** a new agent unfolds a pane that folded after the last batch (1.1.0 listed agents at spawn, so none
+  looked new), including one spawned while the list was being read.
+- An opened run of hundreds of tool calls draws its newest 40 with `… +N earlier calls`, instead of making the engine
+  refuse the whole pane.
+- An agent's model is kept when it spawns during a sync; with `autoOpen` off, a pane folded by hand stays folded.
+- Above the prompt, a running child of a finished parent has its row; a conversation left on an agent no longer listed
+  goes back to the list, so the pane can fold; the status line shows while another pane covers this one.
+- A tool result's preview reads only its first 8 KB; Stop's consent names the agent by type and id only.
+
 ## 1.1.0 — 2026-10-02
 
 - **Light on redraws:** the spinner, the shimmer on `Running…` and every clock run in a surface module (`hooks/live.tsx`)

@@ -23,6 +23,9 @@ const MAX_ARG = 300 // characters of a tool call's argument kept
 const MAX_LINE = 500 // characters of one result line kept
 const MAX_REPLY = 6_000 // characters of one reply drawn as Markdown
 const TEXT_BUDGET = 60_000 // characters of a conversation drawn at once
+const GROUP_BUDGET = 30_000 // characters of one opened run of tool calls: its newest calls
+const GROUP_CALLS = 40 // and at most this many of them
+const PREVIEW_SCAN = 8_192 // characters of a tool's result read for its preview
 const MIN_ROWS = 3
 const BATCH_GAP_MS = 60_000 // an agent started this long after the last one ended begins a new batch
 const MAX_LANES = 8 // rows of the time axis
@@ -264,9 +267,12 @@ export type Block =
 const STATE_COLOR: Record<CallState, string> = { running: 'claude', ok: 'success', error: 'error', stopped: 'inactive' }
 
 // A tool's result as its first lines, each cut to length, and how many more it had.
+// Only the head is cleaned and split; the rest, often megabytes, is counted by its newlines.
 export const preview = (text: string) => {
-  const lines = clean(text).split('\n').map(l => l.trimEnd()).filter(l => l.trim())
-  return { result: lines.slice(0, PREVIEW_LINES).map(l => fit(l, MAX_LINE)), more: Math.max(0, lines.length - PREVIEW_LINES) }
+  const lines = clean(text.slice(0, PREVIEW_SCAN)).split('\n').map(l => l.trimEnd()).filter(l => l.trim())
+  let rest = 0 // lazy: counts blank lines past the head too; exact would need the whole text split
+  for (let i = text.indexOf('\n', PREVIEW_SCAN); i !== -1; i = text.indexOf('\n', i + 1)) rest++
+  return { result: lines.slice(0, PREVIEW_LINES).map(l => fit(l, MAX_LINE)), more: Math.max(0, lines.length - PREVIEW_LINES) + rest }
 }
 
 // Pure: an agent's conversation as blocks: its brief (and any later message to it), each reply, and each
@@ -309,6 +315,20 @@ export const pickBlocks = (blocks: readonly Block[], top: number | null) => {
   if (top === null) for (let i = blocks.length - 1; take(blocks[i], b => out.unshift(b)); i--);
   else for (let i = Math.max(0, top); take(blocks[i], b => out.push(b)); i++);
   return out
+}
+
+// Pure: the newest calls of an opened run that fit GROUP_BUDGET and GROUP_CALLS (always one), and how many
+// earlier ones are left out: an agent that only calls tools makes one run of hundreds.
+export const lastCalls = (calls: readonly Call[]) => {
+  let used = 0
+  let from = calls.length
+  while (from > 0 && calls.length - from < GROUP_CALLS) {
+    const c = calls[from - 1]!
+    used += c.arg.length + c.result.join('').length + 40
+    if (used > GROUP_BUDGET && from < calls.length) break
+    from--
+  }
+  return { shown: calls.slice(from), hidden: from }
 }
 
 // A run of tool calls in Claude Code's words: "Read 3 files, ran 2 commands".
@@ -423,6 +443,8 @@ let viewingId: string | null = null // the conversation on screen, for the event
 let transcript = { key: '', blocks: [] as Block[] } // that conversation's blocks, read once per change
 // lazy: one sync at a time by a module flag; a slow agent.list only skips ticks.
 let syncing = false
+// Agents the spawn hook listed since the last sync: new to the pane, though the list already holds them.
+const spawnedSinceSync = new Set<string>()
 
 // Never rejects. Keeps the list current, opens the pane when an agent starts, folds it once they are done.
 async function sync($: EngineInterface) {
@@ -430,9 +452,11 @@ async function sync($: EngineInterface) {
   syncing = true
   try {
     const now = await $.clock.now()
+    const info = await $.agent.list()
     const before = await read($, agents)
-    const list = mergeAgents(before, await $.agent.list(), now)
-    if (JSON.stringify(list) !== JSON.stringify(before)) await update($, agents, () => list)
+    let list = mergeAgents(before, info, now)
+    // Written over the list as it stands then, so an agent the spawn hook records meanwhile keeps its model.
+    if (JSON.stringify(list) !== JSON.stringify(before)) list = await update($, agents, cur => mergeAgents(cur, info, now))
     const notice = finishNotice(before, list, now)
     if (notice && cfg.toasts) $.ui.toast(notice)
     const ids = new Set(list.map(a => a.id))
@@ -442,10 +466,16 @@ async function sync($: EngineInterface) {
     const running = list.filter(a => a.status === 'running')
     const pane = (await $.ui.panes()).find(p => p.id === PANE)
     // A new agent unfolds the pane, whoever folded or closed it, and shows the list.
-    if (running.some(a => !before.some(b => b.id === a.id))) {
+    const fresh = running.some(a => spawnedSinceSync.has(a.id) || !before.some(b => b.id === a.id))
+    for (const a of list) spawnedSinceSync.delete(a.id) // a spawn recorded after this list was read waits for the next
+    if (fresh) {
       closedByPerson = false
-      if (!pane) await showList($, { clearFold: true })
+      // With autoOpen off the pane stays shut, and a fold the person made keeps its tab.
+      if (!pane && cfg.autoOpen) await showList($, { clearFold: true })
     }
+    // The conversation on screen belongs to an agent no longer listed (/clear): back to the list, so it can fold.
+    const open = await read($, viewing)
+    if (open && !ids.has(open)) await showList($)
     if (running.length) lastRunningAt = now
     if (pane && running.length) foldWhenIdle = true
     if (!pane && running.length && cfg.autoOpen && !closedByPerson && !(await read($, folded))) {
@@ -471,7 +501,7 @@ async function sync($: EngineInterface) {
       await update($, tokens, m => Object.fromEntries(Object.entries(m).filter(([id]) => kept(id))))
 
     // Under the prompt while a batch runs and the pane is not on screen (folded, closed, or waiting for room).
-    const placed = cfg.statusLine && (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
+    const placed = cfg.statusLine && (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced && p.isShown)
     const status = cfg.statusLine && !placed ? statusOf(latestBatch(list)) : undefined
     if (status !== lastStatus) {
       lastStatus = status
@@ -529,7 +559,8 @@ async function unfold($: EngineInterface) {
 async function stopAgent($: EngineInterface, a: Agent) {
   const name = nameOf(a)
   const done = (await $.tool
-    .call({ tool: 'TaskStop', task_id: a.id, consent: `The user pressed "Stop" on ${name} in the agents pane` } as never)
+    // The consent reads to the engine as the person's words: the type and id, never the description a model wrote.
+    .call({ tool: 'TaskStop', task_id: a.id, consent: `The user pressed "Stop" on the ${JSON.stringify(fit(oneLine(a.type), 30))} agent ${fit(a.id, 40)} in the agents pane` } as never)
     .catch((err: unknown) => ({ deny: String(err) }))) as { deny?: string; isError?: boolean; text?: string }
   const why = done.deny || (done.isError ? oneLine(String(done.text ?? '')) || 'the tool reported an error' : '')
   if (why) $.ui.toast(`Could not stop ${name}: ${fit(why, 120)}`)
@@ -602,6 +633,7 @@ export const register: Register = (on, options) => {
         ...(e.parentAgentId && { parentId: e.parentAgentId }), ...(e.name && { name: e.name }),
         firstSeen: await $.clock.now(), seenRunning: true, ...(started.model && { model: started.model }),
       }
+      spawnedSinceSync.add(id)
       void update($, agents, list => spawned(list, a)).catch(() => undefined)
     }
     return started
@@ -767,6 +799,7 @@ export const register: Register = (on, options) => {
         }
         if (b.calls.length === 1) return <Box flexShrink={0} marginTop={1}>{call(b.calls[0]!)}</Box>
         const isOpen = open.has(b.key)
+        const opened = lastCalls(b.calls)
         const live = b.calls.find(c => c.state === 'running')
         const failed = b.calls.find(c => c.state === 'error')
         return (
@@ -778,7 +811,8 @@ export const register: Register = (on, options) => {
             </Box>
             {isOpen ? (
               <Box flexDirection="column" paddingLeft={2}>
-                {b.calls.map(call)}
+                {opened.hidden ? <Text dimColor>{`… +${opened.hidden} earlier call${opened.hidden === 1 ? '' : 's'}`}</Text> : null}
+                {opened.shown.map(call)}
               </Box>
             ) : live ? (
               <Text color="claude" wrap="truncate-end">{`  ⎿  ${live.name}${live.arg ? `(${live.arg})` : ''} · Running…`}</Text>
@@ -917,7 +951,7 @@ export const register: Register = (on, options) => {
 
     // Above the prompt (no fullscreen to dock in): a summary of at most INLINE_ROWS rows.
     if (inline) {
-      const live = [...running.flatMap(g => [g.agent, ...g.kids.map(k => k.agent)])].filter(a => a.status === 'running')
+      const live = all.filter(a => a.status === 'running') // a finished parent's running children too
       const SHOW = INLINE_ROWS - 3
       const ended = (s2: string) => all.filter(a => a.status === s2).length
       const tally = ['completed', 'failed', 'killed'].map(s2 => (ended(s2) ? `${look(s2).mark} ${ended(s2)} ${look(s2).word.toLowerCase()}` : '')).filter(Boolean)

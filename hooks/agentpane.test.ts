@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { SessionMessage } from 'claude-code'
 
-import { addUsage, arrange, batchReceipt, finishNotice, clean, cols, describeTool, fmtTokens, latestBatch, statusOf, groupSummary, mergeAgents, parseConfig, pickBlocks, prettyModel, preview, spawned, stepLoop, toolParts, transcriptBlocks, visibleAgents, wrap } from './register'
+import { addUsage, arrange, batchReceipt, lastCalls, finishNotice, clean, cols, describeTool, fmtTokens, latestBatch, statusOf, groupSummary, mergeAgents, parseConfig, pickBlocks, prettyModel, preview, spawned, stepLoop, toolParts, transcriptBlocks, visibleAgents, wrap } from './register'
 import type { Block } from './register'
 import { fmtDuration, laneRows } from './time'
 
@@ -175,5 +175,25 @@ describe('transcript', () => {
   test('a result previews its first three non-empty lines', async () => {
     expect(preview('a\n\nb\nc\nd\ne')).toEqual({ result: ['a', 'b', 'c'], more: 2 })
     expect(preview('')).toEqual({ result: [], more: 0 })
+  })
+})
+
+describe('review fixes', () => {
+  test('a result\'s preview reads its head and counts the rest', async () => {
+    const big = `first\nsecond\nthird\nfourth\n${'x'.repeat(10_000)}\n${'more\n'.repeat(1_000)}`
+    const p = preview(big)
+    expect(p.result).toEqual(['first', 'second', 'third'])
+    expect(p.more).toBeGreaterThanOrEqual(1_000)
+    expect(preview('a\n\nb\nc\nd')).toEqual({ result: ['a', 'b', 'c'], more: 1 })
+  })
+  test('an opened run keeps its newest calls within budget, always at least one', async () => {
+    const call = (i: number, size: number) => ({ id: `c${i}`, name: 'Bash', arg: 'x'.repeat(size), state: 'ok' as const, result: [], more: 0 })
+    const many = Array.from({ length: 100 }, (_, i) => call(i, 10))
+    expect(lastCalls(many).shown.length).toBe(40)
+    expect(lastCalls(many).hidden).toBe(60)
+    expect(lastCalls(many).shown.at(-1)?.id).toBe('c99')
+    const huge = [call(0, 50_000), call(1, 50_000)]
+    expect(lastCalls(huge)).toMatchObject({ hidden: 1, shown: [{ id: 'c1' }] })
+    expect(lastCalls([call(0, 10)])).toMatchObject({ hidden: 0 })
   })
 })
