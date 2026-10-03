@@ -69,14 +69,15 @@ test('a running agent opens the pane, lists what it does, and the pane folds onc
   await clock.advance(1_000)
   expect(world.opened).toBe(1)
   await $.tool.call({ tool: 'Bash', command: 'ls hooks', agentId: 'a1' } as never)
-  const stepped = $.turn.step({ turnId: 't', index: 0, model: 'm', messageCount: 1, agentId: 'a1' } as never)
+  const stepped = $.turn.step({ turnId: 't', index: 0, model: 'claude-fable-5-1', messageCount: 1, agentId: 'a1' } as never)
   for await (const _ of stepped as AsyncIterable<unknown>) void _ // the engine reads a response to its end
   await clock.advance(1_000)
   const ui = await $.ui.mount(PANE)
   expect(await ui.find({ type: 'Text', text: /1 running/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /⎿ {2}Bash\(ls hooks\)$/ })).toBeDefined()
   const live = await ui.find({ type: 'Client' } as never)
-  expect((live as unknown as { props: { props: { detail: string } } }).props.props.detail).toBe('40k in · 1.2k out')
+  // listed by the poll, no spawn report: the model is the one its request named
+  expect((live as unknown as { props: { props: { detail: string } } }).props.props.detail).toBe('Fable 5.1 · 40k in · 1.2k out')
   world.agents = [{ ...world.agents[0]!, status: 'completed' }]
   await clock.advance(5_000)
   expect(world.closed).toBe(0)
@@ -392,6 +393,19 @@ test('a spawned agent is listed at once with its model, before the next poll', a
   expect(await ui.find({ type: 'Button', text: /Explore\(look around\)/ })).toBeDefined()
   const live = (await ui.find({ type: 'Client' } as never)) as unknown as { props: { props: { detail: string } } }
   expect(live.props.props.detail).toContain('Sonnet 5.5')
+  await ui.unmount()
+})
+
+test('the model and effort its requests name show, the model winning over the spawn alias', async ($, on) => {
+  mock.clock(on)
+  const world: World = { agents: [], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await spawnOne($, 'look around') // the spawn reports claude-sonnet-5-5
+  for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'claude-opus-5-5[1m]', effort: 'xhigh', messageCount: 1, agentId: 'sp-look-around' } as never)) void _
+  const ui = await $.ui.mount(PANE)
+  const live = (await ui.find({ type: 'Client' } as never)) as unknown as { props: { props: { detail: string } } }
+  expect(live.props.props.detail).toMatch(/^Opus 5\.5 \(1M\) · xhigh · /)
+  expect(live.props.props.detail).not.toContain('Sonnet')
   await ui.unmount()
 })
 

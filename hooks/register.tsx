@@ -81,6 +81,14 @@ export const prettyModel = (id: string | undefined) => {
   return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}${minor ? `.${minor}` : ''}${wide ? ' (1M)' : ''}`
 }
 
+// How hard it is asked to think, as its requests name it: 'high', or a number where the model takes a budget.
+export const prettyEffort = (effort: string | number | undefined) =>
+  effort === undefined || effort === '' ? '' : typeof effort === 'number' ? `effort ${effort}` : effort
+
+// What an agent runs on, for a detail line: 'Opus 5.5 (1M) · high'.
+export const runsOn = (a: { model?: string; effort?: string | number }) =>
+  [prettyModel(a.model), prettyEffort(a.effort)].filter(Boolean).join(' · ')
+
 // How a status reads and shows, wherever an agent's status is drawn.
 export const look = (status: string): { word: string; mark: string; color?: string; dim?: boolean } =>
   status === 'running' ? { word: 'Running', mark: '✻', color: 'claude' }
@@ -647,7 +655,15 @@ export const register: Register = (on, options) => {
     if (id) {
       const usage = result?.usage
       if (usage) void update($, tokens, m => ({ ...m, [id]: addUsage(m[id], usage, result.stopReason) })).catch(() => undefined)
-      if (!(await read($, agents)).some(a => a.id === id)) {
+      const listed = (await read($, agents)).find(a => a.id === id)
+      // The model and effort its requests name, as the engine resolved them: an agent whose spawn named no model (a
+      // forked skill, an inherited model) still shows what it runs on, and an alias the spawn gave ('sonnet') reads as
+      // the real id. Effort is the step's alone (a spawn reports none); absent for a model without it.
+      if (listed && ((e.model && listed.model !== e.model) || listed.effort !== e.effort)) {
+        const ran = { ...(e.model && { model: e.model }), effort: e.effort }
+        void update($, agents, l => l.map(a => (a.id === id ? { ...a, ...ran } : a))).catch(() => undefined)
+      }
+      if (!listed) {
         const now = await $.clock.now()
         void update($, loops, l => stepLoop(l, id, now)).catch(() => undefined)
       }
@@ -845,7 +861,7 @@ export const register: Register = (on, options) => {
         ),
         <Text wrap="truncate-end">
           <Text dimColor>
-            {`  ⎿  ${[l.word, act[agent.id] ? uses(act[agent.id]!.tools) : '', prettyModel(agent.model), viewed === agent.id ? 'also in the main view' : ''].filter(Boolean).join(' · ')}`}
+            {`  ⎿  ${[l.word, act[agent.id] ? uses(act[agent.id]!.tools) : '', runsOn(agent), viewed === agent.id ? 'also in the main view' : ''].filter(Boolean).join(' · ')}`}
           </Text>
           {alertOf(agent) ? <Text color="error">{` · ${alertOf(agent)}`}</Text> : null}
         </Text>,
@@ -993,7 +1009,7 @@ export const register: Register = (on, options) => {
       const doing = act[a.id]
       const used = tok[a.id]
       const t = elapsed(a, now)
-      const model = prettyModel(a.model)
+      const model = runsOn(a)
       const lines: RenderChildren[] = [
         <Box key={`row-${a.id}`}>
           <Text color={l.color} dimColor={l.dim}>{`${pad}⏺ `}</Text>

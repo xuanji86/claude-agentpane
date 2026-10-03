@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { SessionMessage } from 'claude-code'
 
-import { addUsage, arrange, batchReceipt, lastCalls, finishNotice, clean, cols, describeTool, fmtTokens, latestBatch, statusOf, groupSummary, mergeAgents, parseConfig, pickBlocks, prettyModel, preview, spawned, stepLoop, toolParts, transcriptBlocks, visibleAgents, wrap } from './register'
+import { addUsage, arrange, batchReceipt, lastCalls, finishNotice, clean, cols, describeTool, fmtTokens, latestBatch, statusOf, groupSummary, mergeAgents, parseConfig, pickBlocks, prettyEffort, prettyModel, preview, runsOn, spawned, stepLoop, toolParts, transcriptBlocks, visibleAgents, wrap } from './register'
 import type { Block } from './register'
 import { fmtDuration, laneRows } from './time'
 
@@ -61,6 +61,8 @@ describe('agents', () => {
   })
   test('model ids read as their names', async () => {
     expect([prettyModel('claude-sonnet-5-5'), prettyModel('claude-haiku-4-5-20251001'), prettyModel('claude-opus-5-5[1m]'), prettyModel('sonnet'), prettyModel(undefined)]).toEqual(['Sonnet 5.5', 'Haiku 4.5', 'Opus 5.5 (1M)', 'sonnet', ''])
+    expect([prettyEffort('high'), prettyEffort(2048), prettyEffort(undefined)]).toEqual(['high', 'effort 2048', ''])
+    expect([runsOn({ model: 'claude-fable-5-1', effort: 'xhigh' }), runsOn({ model: 'claude-fable-5-1' }), runsOn({ effort: 'low' }), runsOn({})]).toEqual(['Fable 5.1 · xhigh', 'Fable 5.1', 'low', ''])
   })
   test('settings fall back to their defaults and stay in range', async () => {
     expect(parseConfig(undefined)).toEqual({ autoOpen: true, foldAfterMs: 10_000, motion: true, toasts: true, keepFinished: 8, statusLine: true })

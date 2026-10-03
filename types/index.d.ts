@@ -13,8 +13,10 @@ export type AgentpaneAgent = {
   seenRunning: boolean
   /** When the pane first saw it done; absent while it runs, or when it was done before the pane saw it. */
   endedAt?: number
-  /** The model it runs on, as its spawn reported it; absent for an agent spawned before the pane loaded. */
+  /** The model it runs on: its spawn's report, then the model each of its requests names; absent until either is seen. */
   model?: string
+  /** How hard its requests ask it to think ('low' … 'max', or a budget number); absent until a request names one. */
+  effort?: string | number
 }
 
 /** The tokens an agent's responses used, summed as the API reported them. */
