@@ -460,13 +460,16 @@ async function sync($: EngineInterface) {
   syncing = true
   try {
     const now = await $.clock.now()
+    // The desktop app has its own agents view: with no terminal drawing, nothing opens or shows unasked there.
+    const surfaces = await $.session.surfaces().catch(() => [])
+    const quiet = surfaces.includes('desktop') && !surfaces.includes('terminal')
     const info = await $.agent.list()
     const before = await read($, agents)
     let list = mergeAgents(before, info, now)
     // Written over the list as it stands then, so an agent the spawn hook records meanwhile keeps its model.
     if (JSON.stringify(list) !== JSON.stringify(before)) list = await update($, agents, cur => mergeAgents(cur, info, now))
     const notice = finishNotice(before, list, now)
-    if (notice && cfg.toasts) $.ui.toast(notice)
+    if (notice && cfg.toasts && !quiet) $.ui.toast(notice)
     const ids = new Set(list.map(a => a.id))
     if (Object.keys(await read($, activity)).some(id => !ids.has(id)))
       await update($, activity, m => Object.fromEntries(Object.entries(m).filter(([id]) => ids.has(id))))
@@ -486,7 +489,7 @@ async function sync($: EngineInterface) {
     if (open && !ids.has(open)) await showList($)
     if (running.length) lastRunningAt = now
     if (pane && running.length) foldWhenIdle = true
-    if (!pane && running.length && cfg.autoOpen && !closedByPerson && !(await read($, folded))) {
+    if (!pane && running.length && cfg.autoOpen && !quiet && !closedByPerson && !(await read($, folded))) {
       autoOpened = true
       await openPane($, 'list') // docked beside a fullscreen transcript, else the summary above the prompt
     } else if (
@@ -510,7 +513,7 @@ async function sync($: EngineInterface) {
 
     // Under the prompt while a batch runs and the pane is not on screen (folded, closed, or waiting for room).
     const placed = cfg.statusLine && (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced && p.isShown)
-    const status = cfg.statusLine && !placed ? statusOf(latestBatch(list)) : undefined
+    const status = cfg.statusLine && !placed && !quiet ? statusOf(latestBatch(list)) : undefined
     if (status !== lastStatus) {
       lastStatus = status
       $.ui.status(status)
@@ -1070,7 +1073,7 @@ export const register: Register = (on, options) => {
   // Folded: a tab at the right edge above the prompt, with the agents' counts, brings the pane back.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     isFullscreen = e.viewport?.isFullscreen ?? isFullscreen
-    if (e.props.hasSurvey) return next(e)
+    if (e.props.hasSurvey || e.surface === 'desktop') return next(e)
     const { Box, Button } = $.ui.resolve(e)
     // What the plugins beneath drew stays. Never hand the band itself back: it would not be drawn again
     // when the tab comes or goes.

@@ -16,6 +16,7 @@ type World = {
   agents: { id: string; description: string; type: string; status: string }[]; panes: string[]; opened: number; closed: number
   widths?: (number | undefined)[]; focus?: (boolean | undefined)[]; toasts?: string[]; tools?: { tool: string; task_id?: string; consent?: string }[]
   placed?: boolean; stopAnswer?: object; messages?: object[]; stopReason?: string; rows?: (number | undefined)[]; status?: (string | undefined)[]
+  surfaces?: string[]
   beforeList?: () => Promise<void> // runs while a sync waits on the engine's list
 }
 
@@ -48,6 +49,7 @@ const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, 
   on('ui.toast', ($, e) => ((world.toasts ??= []).push(String((e as { text?: string }).text ?? e)), { value: undefined }) as never)
   on('ui.status', ($, e) => ((world.status ??= []).push((e as { text?: string }).text), { value: undefined }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.surfaces' as never, () => ({ value: world.surfaces ?? ['terminal'] }) as never)
   on('turn.step', async function* () {
     return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: world.stopReason ?? 'tool_use', usage: { model: 'm', input_tokens: 10, output_tokens: 1_200, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0 } }
   } as never)
@@ -87,6 +89,19 @@ test('a running agent opens the pane, lists what it does, and the pane folds onc
   expect(await band.find({ type: 'Button', text: /◂ Agents ✓ 1/ })).toBeDefined() // to look back at it
   await ui.unmount()
   await band.unmount()
+})
+
+test('in the desktop app nothing opens, toasts or shows unasked', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [], panes: [], opened: 0, closed: 0, surfaces: ['desktop'] }
+  await start($, on, world)
+  world.agents = [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }]
+  await clock.advance(2_000)
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }]
+  await clock.advance(2_000)
+  expect(world.opened).toBe(0)
+  expect(world.toasts ?? []).toEqual([])
+  expect((world.status ?? []).filter(Boolean)).toEqual([])
 })
 
 test('a new agent unfolds a pane folded by hand', async ($, on) => {

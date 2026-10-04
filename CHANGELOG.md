@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.4 — 2026-10-04
+
+- **Quiet in the desktop app:** a session drawn only in Claude Desktop, which has its own agents view, no longer gets
+  the pane opened unasked, the finish toasts, the status line or the `◂ Agents` tab. `/agentpane` still opens the pane
+  there; a terminal session is unchanged.
+
 ## 1.1.3 — 2026-10-03
 
 - **Effort stays shown:** 1.1.2 recorded an agent's thinking effort, but the once-a-second list sync rebuilt the record
