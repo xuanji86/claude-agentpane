@@ -17,6 +17,7 @@ type World = {
   widths?: (number | undefined)[]; focus?: (boolean | undefined)[]; toasts?: string[]; tools?: { tool: string; task_id?: string; consent?: string }[]
   placed?: boolean; stopAnswer?: object; messages?: object[]; stopReason?: string; rows?: (number | undefined)[]; status?: (string | undefined)[]
   surfaces?: string[]
+  view?: object; views?: object[] // the engine's answer to $.ui.view (absent: an engine without it), what it was asked
   beforeList?: () => Promise<void> // runs while a sync waits on the engine's list
 }
 
@@ -50,6 +51,7 @@ const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, 
   on('ui.status', ($, e) => ((world.status ??= []).push((e as { text?: string }).text), { value: undefined }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.surfaces' as never, () => ({ value: world.surfaces ?? ['terminal'] }) as never)
+  if (world.view) on('ui.view' as never, ($, e) => ((world.views ??= []).push(e as object), { value: world.view }) as never)
   on('turn.step', async function* () {
     return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: world.stopReason ?? 'tool_use', usage: { model: 'm', input_tokens: 10, output_tokens: 1_200, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0 } }
   } as never)
@@ -102,6 +104,104 @@ test('in the desktop app nothing opens, toasts or shows unasked', async ($, on) 
   expect(world.opened).toBe(0)
   expect(world.toasts ?? []).toEqual([])
   expect((world.status ?? []).filter(Boolean)).toEqual([])
+})
+
+test('a desktop session no window shows, its roster empty, stays quiet too', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [], panes: [], opened: 0, closed: 0, surfaces: [] }
+  await start($, on, world)
+  world.agents = [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }]
+  await clock.advance(2_000)
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }]
+  await clock.advance(2_000)
+  expect(world.opened).toBe(0)
+  expect(world.toasts ?? []).toEqual([])
+  expect((world.status ?? []).filter(Boolean)).toEqual([])
+})
+
+test('a session VS Code alone draws still opens the pane unasked', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [], panes: [], opened: 0, closed: 0, surfaces: ['vscode'] }
+  await start($, on, world)
+  world.agents = [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }]
+  await clock.advance(1_000)
+  expect(world.opened).toBe(1)
+})
+
+test('a teammate idle between turns holds no pane open, and has no Stop', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 't1', description: 'reviewer', type: 'teammate', status: 'running' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(2_000) // opened, then seen running in it
+  world.agents = [{ ...world.agents[0]!, status: 'idle' }]
+  await clock.advance(12_000)
+  expect(world.closed).toBe(1) // folded, as for an agent that is done
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ key: 'stop-t1' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('pressing an agent puts its transcript in the main view, and ◂ Main goes back', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0, view: {} }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  expect(world.views).toEqual([{ agentId: 'a1' }])
+  expect(await ui.find({ type: 'Markdown', text: /Looking now\./ } as never)).toBeUndefined() // the pane keeps its list
+  expect(world.opened).toBe(1)
+  await ui.unmount()
+  const viewing = { ...(PANE as object), props: { ...(PANE as { props: object }).props, view: { agentId: 'a1' } } } as never
+  const shown = await $.ui.mount(viewing)
+  await shown.press({ key: 'main' })
+  expect(world.views).toEqual([{ agentId: 'a1' }, {}])
+  await shown.unmount()
+})
+
+test('where the main view does not move, the conversation opens in the pane', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0, view: { deny: 'the session draws none' } }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'agent-a1' })
+  expect(world.views).toEqual([{ agentId: 'a1' }])
+  expect(await ui.find({ type: 'Markdown', text: /Looking now\./ } as never)).toBeDefined()
+  await ui.unmount()
+})
+
+test('a running agent has its own Stop in the list, pressed twice', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'find mod examples', type: 'Explore', status: 'running' }], panes: [], opened: 0, closed: 0, view: {} }
+  await start($, on, world)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'stop-a1' })
+  expect(world.tools?.some(t => t.tool === 'TaskStop')).toBeFalsy()
+  expect(await ui.find({ type: 'Button', text: /Confirm stop/ })).toBeDefined()
+  await ui.press({ key: 'stop-a1' })
+  expect(world.tools?.find(t => t.tool === 'TaskStop')?.task_id).toBe('a1')
+  await ui.unmount()
+})
+
+test('an agent waiting on its own background work is still live: no toast, listed as Waiting, done when it ends', async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { agents: [{ id: 'a1', description: 'run the tests', type: 'general-purpose', status: 'running' }], panes: [], opened: 0, closed: 0 }
+  await start($, on, world)
+  await clock.advance(1_000)
+  world.agents = [{ ...world.agents[0]!, status: 'waiting' }]
+  await clock.advance(12_000)
+  expect(world.toasts ?? []).toEqual([])
+  expect(world.closed).toBe(0) // not folded: it has not ended
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: /^1 waiting$/ })).toBeDefined() // counted as waiting, not running
+  const live = await ui.find({ type: 'Client' } as never)
+  expect((live as unknown as { props: { props: { word: string; motion: boolean } } }).props.props).toMatchObject({ word: 'Waiting…', motion: false })
+  await ui.unmount()
+  world.agents = [{ ...world.agents[0]!, status: 'completed' }]
+  await clock.advance(1_000)
+  expect(world.toasts).toEqual(['general-purpose(run the tests) ✓ done · 13s'])
 })
 
 test('a new agent unfolds a pane folded by hand', async ($, on) => {

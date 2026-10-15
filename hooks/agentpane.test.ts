@@ -95,6 +95,9 @@ describe('agents', () => {
     expect(statusOf([a('r', 'running')])).toBe('✻ 1 agent running')
     expect(statusOf([a('r', 'running'), a('s', 'running'), a('d', 'completed'), a('f', 'failed')])).toBe('✻ 2 of 4 agents running · ✗ 1 failed')
     expect(statusOf([a('d', 'completed')])).toBeUndefined()
+    expect(statusOf([a('r', 'running'), a('w', 'waiting')])).toBe('✻ 1 of 2 agents running · 1 waiting')
+    expect(statusOf([a('w', 'waiting')])).toBe('✻ 1 agent waiting')
+    expect(statusOf([a('i', 'idle')])).toBeUndefined()
   })
   test('lanes share one axis, to now while one runs and to the last end once all have ended', async () => {
     const lane = (from: number, to: number | null) => ({ name: 'x', mark: '✓', color: '', dim: false, from, to })

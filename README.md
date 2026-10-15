@@ -5,7 +5,7 @@
 **See your subagents at work, beside the conversation.**<br>
 Every subagent a Claude Code session runs, what it is doing right now, what it costs in tokens, and its whole conversation one click away.
 
-[![Version](https://img.shields.io/badge/version-1.1.4-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
 [![Claude Code mod](https://img.shields.io/badge/Claude%20Code-mod-c678dd.svg)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4eba65.svg)](LICENSE)
 [![validates](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-validates.svg)](https://github.com/karanb192/awesome-claude-code-mods)
@@ -20,13 +20,13 @@ Every subagent a Claude Code session runs, what it is doing right now, what it c
 
 When Claude fans work out to subagents, the terminal shows one line per agent and a footer list. **agentpane** is a
 [mod](https://code.claude.com/docs/en/plugins/mods/overview) that keeps them in a side pane, drawn the way Claude
-Code draws its own rows, and opens each one's conversation in place.
+Code draws its own rows; click one and Claude Code's main view shows its conversation.
 
 ## Features
 
 | | |
 | --- | --- |
-| **Live list** | `⏺ Type(description)`, the tool call it runs now, `+N more tool uses`, and `✶ Running… (1m 12s · Opus 5.5 · 412k in · 1.9k out)`; listed the moment it spawns |
+| **Live list** | `⏺ Type(description)`, the tool call it runs now, `+N more tool uses`, and `✶ Running… (1m 12s · Opus 5.5 · 412k in · 1.9k out)`, or `✻ Waiting…` while it waits on its own background work; listed the moment it spawns |
 | **Nested agents** | An agent's own subagents sit indented under it |
 | **Tokens, model and effort** | Input (cached share shown), output, context size and requests per agent, from the API's own usage figures; the model and thinking effort each agent's requests actually use; `max_tokens` in red when a response was cut off |
 | **Other loops** | Model loops no listed agent claims (a workflow's agents, compaction and memory forks), counted under the list |
@@ -34,8 +34,8 @@ Code draws its own rows, and opens each one's conversation in place.
 | **Batch receipt** | Once a batch ends: `✓ 4 agents in 31s · 1m 18s of agent time (2.5× in parallel) · 21 tool uses · 190k tokens` |
 | **Status line** | `✻ 2 of 4 agents running` under the prompt while the pane is folded or closed |
 | **Follows the main view** | The agent you open from Claude Code's footer list is marked `◂ main view` |
-| **Conversations** | Click an agent: its brief, replies in Markdown, tool calls with their results, runs of calls folded into one line |
-| **Stop** | `■ Stop`, then `Confirm stop`, ends a running agent through Claude Code's TaskStop |
+| **Conversations** | Click an agent: the main view switches to its transcript, and `◂ Main` in the pane's header goes back. Where the main view can't switch (Claude Code before 2.1.300), it opens in the pane: its brief, replies in Markdown, tool calls with their results, runs of calls folded into one line |
+| **Stop** | `■ Stop` on a running agent's row, then `Confirm stop`, ends it through Claude Code's TaskStop |
 | **Notices** | A toast when an agent finishes, one for several at once |
 | **Opens and folds itself** | Opens when an agent starts, folds 10 s after the last one ends, to a tab above the prompt |
 | **Theme colours** | Claude Code's own theme keys: follows dark, light and colourblind themes |
@@ -44,7 +44,7 @@ Code draws its own rows, and opens each one's conversation in place.
 
 ## Install
 
-Needs **Claude Code 2.1.287 or later**, the release that brought mods (function hooks); tested on 2.1.288. The side
+Needs **Claude Code 2.1.287 or later**, the release that brought mods (function hooks); tested on 2.1.300. The side
 pane needs the fullscreen layout (`/tui fullscreen`); on the main screen agentpane is a summary above the prompt. Mods
 are early access: their API may change between releases, and a release that breaks the pane gets a fix here.
 
@@ -69,11 +69,11 @@ claude plugin install agentpane@claude-agentpane
 <tr>
 <td width="60%" valign="top">
 
-**A conversation** — click an agent
+**A conversation in the pane** — before Claude Code 2.1.300
 
 <img src="assets/conversation.svg" alt="One agent's conversation in the widened pane" width="100%">
 
-The pane widens to read it. `▲` `▼` step through it (`k` `j`), `←` goes back (`b`); scrolled back, the view holds
+Where the main view can't switch, clicking an agent opens its conversation here, and the pane widens to read it. `▲` `▼` step through it (`k` `j`), `←` goes back (`b`); scrolled back, the view holds
 still while the agent writes on. Click a folded run of tool calls to open it.
 
 </td>
@@ -115,7 +115,7 @@ Its footprint, as the [awesome-claude-code-mods](https://github.com/karanb192/aw
 
 [![reach](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-reach.svg)](https://github.com/karanb192/awesome-claude-code-mods)
 
-agentpane watches, and acts only when you press Stop. Every hook passes its event on unchanged.
+agentpane watches, and acts only when you click an agent or press Stop. Every hook passes its event on unchanged.
 
 | It sees | Through |
 | --- | --- |
@@ -124,11 +124,12 @@ agentpane watches, and acts only when you press Stop. Every hook passes its even
 | each agent's token usage and stop reason | `turn.step` |
 | an agent's transcript, while you have it open | `$.session.messages({ agentId })` |
 | which agent the main view shows | the pane's `view` |
+| the main view, switched to an agent you click (`◂ Main` back) | `$.ui.view` |
 
 What it draws outside its pane: the tab above the prompt, toasts, and one status line (`$.ui.status`).
 
 It makes **no** network requests, runs no processes, reads and writes no files, stores nothing across sessions and calls
-no model. Its one action is Stop: Claude Code's own `TaskStop`, on your second press, naming the agent in a cleaned,
+no model. Its actions are yours: switching the main view on your click, and Stop: Claude Code's own `TaskStop`, on your second press, naming the agent in a cleaned,
 shortened line. Text from transcripts is stripped of control, bidi and zero-width characters and cut to length before it
 is drawn. `claude plugin validate .` prints exactly what it hooks and calls.
 
@@ -144,8 +145,8 @@ is drawn. `claude plugin validate .` prints exactly what it hooks and calls.
 
 ## Limits
 
-- **The main view stays yours.** A mod cannot switch Claude Code's main view to an agent; the footer's agent list
-  (↓ then Enter) does that. agentpane shows the conversation in the pane, and marks the one the main view shows.
+- **The main view switches only on your click,** and only from Claude Code 2.1.300 (`$.ui.view`). Before that, and in
+  Claude Desktop until its own copy of Claude Code catches up, the conversation opens in the pane instead.
 - **Workflow agents** have no names to list: the engine does not hand them to mods. They count under *other loops*.
 
 ## Troubleshooting

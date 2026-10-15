@@ -53,6 +53,8 @@ const RIGHT_MARGIN = 1 // matches that one space on the right, so the content si
 // The handle: a tab several rows tall, each row of it a press target, so a click anywhere on it lands.
 const HANDLE = ['╷ ', '│ ', '▸ ', '│ ', '╵ ']
 const CLOSE_MARK_COLS = 3 // the engine draws its close mark over the end of the pane's first row
+const STOP_COLS = 7 // a row's "■ Stop" and the space before it
+const CONFIRM_COLS = 17 // a row's "[ Confirm stop ]" and the space before it
 const BAND_RIGHT_PAD = 5 // clear of the engine's [-] band toggle at the band's top right
 
 // The person's settings (`/config`, or pluginConfigs.agentpane.options in settings.json).
@@ -92,10 +94,19 @@ export const runsOn = (a: { model?: string; effort?: string | number }) =>
 // How a status reads and shows, wherever an agent's status is drawn.
 export const look = (status: string): { word: string; mark: string; color?: string; dim?: boolean } =>
   status === 'running' ? { word: 'Running', mark: '✻', color: 'claude' }
+  : status === 'waiting' ? { word: 'Waiting', mark: '✻', color: 'warning' }
+  : status === 'pending' ? { word: 'Starting', mark: '✻', color: 'claude', dim: true }
+  : status === 'idle' ? { word: 'Idle', mark: '·', dim: true }
   : status === 'completed' ? { word: 'Done', mark: '✓', color: 'success' }
   : status === 'failed' ? { word: 'Failed', mark: '✗', color: 'error' }
   : status === 'killed' ? { word: 'Stopped', mark: '⊘', dim: true }
   : { word: status, mark: '·', dim: true }
+
+// At work: not started yet, in a turn, or held (on its own background work, a plan's approval or, run in the
+// background, an Agent call). Not: ended (completed, failed, killed), or a teammate idle between turns, which may
+// stay idle for good and so holds no pane open and no status line.
+const LIVE = new Set(['pending', 'running', 'waiting'])
+export const isLive = (status: string) => LIVE.has(status)
 
 // Terminal columns a string takes: East Asian wide and fullwidth characters and emoji take two.
 // lazy: range table, not full Unicode East Asian Width; upgrade to a generated table if a script draws wrong.
@@ -184,13 +195,13 @@ export const mergeAgents = (before: readonly Agent[], list: readonly AgentInfo[]
   const prev = new Map(before.map(a => [a.id, a]))
   const listed = new Set(list.map(a => a.id))
   // A spawn the hook recorded that the engine's list does not show yet: kept a moment, not dropped.
-  const pending = before.filter(a => !listed.has(a.id) && a.status === 'running' && now - a.firstSeen < SPAWN_GRACE_MS)
+  const pending = before.filter(a => !listed.has(a.id) && isLive(a.status) && now - a.firstSeen < SPAWN_GRACE_MS)
   const merged = list.map(info => {
     const old = prev.get(info.id)
-    const running = info.status === 'running'
-    const seenRunning = (old?.seenRunning ?? false) || running
-    const endedAt = running ? undefined : (old?.endedAt ?? (seenRunning ? now : undefined))
-    const resumed = running && old?.endedAt !== undefined // ended, then sent a message: a new run from now
+    const live = isLive(info.status)
+    const seenRunning = (old?.seenRunning ?? false) || live
+    const endedAt = live ? undefined : (old?.endedAt ?? (seenRunning ? now : undefined))
+    const resumed = live && old?.endedAt !== undefined // ended, then sent a message: a new run from now
     return {
       id: info.id, description: info.description, type: info.type, status: info.status,
       ...(info.name && { name: info.name }), ...(info.parentId && { parentId: info.parentId }),
@@ -216,18 +227,18 @@ export const visibleAgents = (all: readonly Agent[], keep = 8): Agent[] => {
   const ended = (a: Agent, i: number) => [a.endedAt ?? a.firstSeen, i] as const
   const recent = all
     .map((a, i) => ({ a, key: ended(a, i) }))
-    .filter(({ a }) => a.status !== 'running')
+    .filter(({ a }) => !isLive(a.status))
     .sort((x, y) => y.key[0] - x.key[0] || y.key[1] - x.key[1])
     .slice(0, keep)
     .map(({ a }) => a)
-  return all.filter(a => a.status === 'running' || recent.includes(a))
+  return all.filter(a => isLive(a.status) || recent.includes(a))
 }
 
 // Pure: the list as groups, each agent whose parent is not listed heading one with its descendants under
 // it; running groups first. With `onlyRunning`, finished agents are left out and their running children
 // head groups of their own.
 export const arrange = (shown: readonly Agent[], onlyRunning = false) => {
-  const list = onlyRunning ? shown.filter(a => a.status === 'running') : shown
+  const list = onlyRunning ? shown.filter(a => isLive(a.status)) : shown
   const ids = new Set(list.map(a => a.id))
   const under = (id: string) => {
     const out: { agent: Agent; depth: number }[] = []
@@ -239,7 +250,7 @@ export const arrange = (shown: readonly Agent[], onlyRunning = false) => {
     return out
   }
   const tops = list.filter(a => !a.parentId || !ids.has(a.parentId)).map(a => ({ agent: a, kids: under(a.id) }))
-  return { running: tops.filter(t => t.agent.status === 'running'), finished: tops.filter(t => t.agent.status !== 'running') }
+  return { running: tops.filter(t => isLive(t.agent.status)), finished: tops.filter(t => !isLive(t.agent.status)) }
 }
 
 const elapsed = (a: Agent, now: number) => (a.seenRunning ? fmtDuration((a.endedAt ?? now) - a.firstSeen) : '')
@@ -367,7 +378,7 @@ const nameOf = (a: Agent, max = 60) => `${fit(oneLine(a.type), 30)}(${fit(oneLin
 
 // Pure: the toast for agents that finished since the last look, or null when none did.
 export const finishNotice = (before: readonly Agent[], after: readonly Agent[], now: number) => {
-  const ended = after.filter(a => a.status !== 'running' && before.some(b => b.id === a.id && b.status === 'running'))
+  const ended = after.filter(a => !isLive(a.status) && before.some(b => b.id === a.id && isLive(b.status)))
   if (!ended.length) return null
   if (ended.length === 1) {
     const a = ended[0]!
@@ -389,7 +400,7 @@ export const latestBatch = (all: readonly Agent[]): Agent[] => {
   let reach = -Infinity // when the agents so far had all ended; never, while one runs
   ran.forEach((a, i) => {
     if (a.firstSeen > reach + BATCH_GAP_MS) start = i
-    reach = Math.max(reach, a.status === 'running' ? Infinity : (a.endedAt ?? a.firstSeen))
+    reach = Math.max(reach, isLive(a.status) ? Infinity : (a.endedAt ?? a.firstSeen))
   })
   return ran.slice(start)
 }
@@ -401,7 +412,7 @@ export const batchReceipt = (
   act: Readonly<Record<string, { tools: number }>>,
   tok: Readonly<Record<string, Tokens>>,
 ) => {
-  if (batch.length < 2 || batch.some(a => a.status === 'running')) return null
+  if (batch.length < 2 || batch.some(a => isLive(a.status))) return null
   const end = (a: Agent) => a.endedAt ?? a.firstSeen
   const wall = Math.max(...batch.map(end)) - Math.min(...batch.map(a => a.firstSeen))
   // An agent's subagents run inside its own time: only the agents at the top of the batch add to it.
@@ -427,11 +438,16 @@ export const batchReceipt = (
 
 // Pure: the status line under the prompt while a batch runs, or undefined to clear it.
 export const statusOf = (batch: readonly Agent[]) => {
-  const running = batch.filter(a => a.status === 'running').length
-  if (!running) return undefined
+  const live = batch.filter(a => isLive(a.status)).length
+  if (!live) return undefined
+  const waiting = batch.filter(a => a.status === 'waiting').length
+  const running = live - waiting
   const failed = batch.filter(a => a.status === 'failed').length
-  const of = running === batch.length ? `${running} agent${running === 1 ? '' : 's'} running` : `${running} of ${batch.length} agents running`
-  return `${look('running').mark} ${of}${failed ? ` · ${look('failed').mark} ${failed} failed` : ''}`
+  const of =
+    !running ? `${waiting} agent${waiting === 1 ? '' : 's'} waiting`
+    : running === batch.length ? `${running} agent${running === 1 ? '' : 's'} running`
+    : `${running} of ${batch.length} agents running`
+  return `${look(running ? 'running' : 'waiting').mark} ${of}${running && waiting ? ` · ${waiting} waiting` : ''}${failed ? ` · ${look('failed').mark} ${failed} failed` : ''}`
 }
 
 // Module state that nothing draws from (a reload resets it to "nothing opened yet").
@@ -444,6 +460,7 @@ let lastPlacement: string | null = null
 let lastColumns = 0 // the terminal's width, from the last drawing
 let lastRunningAt = 0
 let armedAt = 0 // when Stop was pressed once
+let viewedNow: string | null = null // the agent the main view showed at the pane's last drawing
 // The status line as last set, so it is set only when it changes; null: not yet by this module, so a line a
 // reload left behind is cleared on the first sync.
 let lastStatus: string | undefined | null = null
@@ -460,9 +477,10 @@ async function sync($: EngineInterface) {
   syncing = true
   try {
     const now = await $.clock.now()
-    // The desktop app has its own agents view: with no terminal drawing, nothing opens or shows unasked there.
-    const surfaces = await $.session.surfaces().catch(() => [])
-    const quiet = surfaces.includes('desktop') && !surfaces.includes('terminal')
+    // The desktop app has its own agents view: where nothing else draws, nothing opens or shows unasked. It attaches
+    // only while its window shows the session, so a desktop session off screen draws on no surface at all.
+    const surfaces = await $.session.surfaces().catch((): readonly string[] => [])
+    const quiet = !surfaces.some(s => s !== 'desktop')
     const info = await $.agent.list()
     const before = await read($, agents)
     let list = mergeAgents(before, info, now)
@@ -474,7 +492,7 @@ async function sync($: EngineInterface) {
     if (Object.keys(await read($, activity)).some(id => !ids.has(id)))
       await update($, activity, m => Object.fromEntries(Object.entries(m).filter(([id]) => ids.has(id))))
 
-    const running = list.filter(a => a.status === 'running')
+    const running = list.filter(a => isLive(a.status))
     const pane = (await $.ui.panes()).find(p => p.id === PANE)
     // A new agent unfolds the pane, whoever folded or closed it, and shows the list.
     const fresh = running.some(a => spawnedSinceSync.has(a.id) || !before.some(b => b.id === a.id))
@@ -494,7 +512,7 @@ async function sync($: EngineInterface) {
       await openPane($, 'list') // docked beside a fullscreen transcript, else the summary above the prompt
     } else if (
       pane && foldWhenIdle && !running.length && cfg.foldAfterMs > 0 && now - lastRunningAt >= cfg.foldAfterMs &&
-      !pane.isFocused && !(await read($, viewing))
+      !pane.isFocused && !viewedNow && !(await read($, viewing))
     ) {
       await foldAway($) // all done; not while the person reads a conversation
     }
@@ -562,8 +580,24 @@ async function unfold($: EngineInterface) {
   await update($, tab, () => false)
   closedByPerson = false
   autoOpened = false
-  foldWhenIdle = (await read($, agents)).some(a => a.status === 'running')
+  foldWhenIdle = (await read($, agents)).some(a => isLive(a.status))
   await openPane($, (await read($, viewing)) ? 'conversation' : 'list')
+}
+
+// Stop pressed once on an agent: armed for CONFIRM_MS, and a second press stops it.
+async function armStop($: EngineInterface, id: string) {
+  armedAt = await $.clock.now()
+  await update($, confirmStop, () => id)
+}
+
+// Puts an agent's transcript in the main view, or with no id the main conversation; whether the view moved.
+// Called before the press it answers awaits anything: the engine moves the view only while answering the person.
+function viewIn($: EngineInterface, agentId?: string): Promise<boolean> {
+  try {
+    return $.ui.view(agentId ? { agentId } : {}).then(r => !r.deny, () => false)
+  } catch {
+    return Promise.resolve(false) // a Claude Code before $.ui.view
+  }
 }
 
 // Stop a running agent with Claude Code's own TaskStop, on the person's confirmed press of Stop.
@@ -614,7 +648,7 @@ export const register: Register = (on, options) => {
       await update($, confirmStop, () => null)
       if (!foldingAway) {
         // closed by hand (its close mark, Esc, ctrl+x x, /agentpane) while agents run: stays shut until a new one starts
-        closedByPerson = (await read($, agents)).some(a => a.status === 'running')
+        closedByPerson = (await read($, agents)).some(a => isLive(a.status))
         await update($, viewing, () => null)
       }
     }
@@ -687,6 +721,7 @@ export const register: Register = (on, options) => {
     const inline = e.props.placement === 'inline' // above the prompt: a summary, no handle
     const W = Math.max(22, e.props.bodyColumns - (inline ? 0 : HANDLE_COLS) - RIGHT_MARGIN) // the content, right of the handle
     const viewed = e.props.view?.agentId ?? null // the agent the person has open in the main view
+    viewedNow = viewed
     const rows = Math.max(MIN_ROWS + 6, e.props.scroll.bodyRows)
     const now = await $.clock.now()
     const all = await read($, agents)
@@ -695,25 +730,34 @@ export const register: Register = (on, options) => {
     const id = await read($, viewing)
     const agent = id ? all.find(a => a.id === id) : undefined
     viewingId = agent ? agent.id : null
-    const runningCount = all.filter(a => a.status === 'running').length
-    const doneCount = all.length - runningCount
+    const liveCount = all.filter(a => isLive(a.status)).length
+    const waitingCount = all.filter(a => a.status === 'waiting').length
+    const doneCount = all.length - liveCount
+    const active = [liveCount - waitingCount ? `${liveCount - waitingCount} running` : '', waitingCount ? `${waitingCount} waiting` : ''].filter(Boolean).join(' · ')
     const hint = (text: string) => <Text dimColor wrap="truncate-end">{text}</Text>
     const alertOf = (a: Agent) => (tok[a.id]?.truncated ? `max_tokens ×${tok[a.id]!.truncated}` : '')
     // A running agent's spinner, shimmering "Running…" and clock, redrawn by the surface, not by this hook.
-    const liveLine = (a: Agent, pad: string, detail: string) =>
-      Client && a.seenRunning ? (
-        <Client key={`live-${a.id}`} module="./live.tsx" props={{ since: a.firstSeen, now, pad, detail, alert: alertOf(a), motion: cfg.motion, clockOnly: false }} />
+    const liveLine = (a: Agent, pad: string, detail: string) => {
+      const l = look(a.status)
+      const word = `${l.word}…`
+      return Client && a.seenRunning ? (
+        <Client
+          key={`live-${a.id}`}
+          module="./live.tsx"
+          props={{ since: a.firstSeen, now, pad, detail, alert: alertOf(a), word, mark: l.mark, color: l.color, dim: !!l.dim, motion: cfg.motion && a.status === 'running', clockOnly: false }}
+        />
       ) : (
         <Text wrap="truncate-end">
-          <Text color="claude">{`${pad}  ✻ Running…`}</Text>
+          <Text color={l.color} dimColor={l.dim}>{`${pad}  ${l.mark} ${word}`}</Text>
           <Text dimColor>{` (${[elapsed(a, now), detail].filter(Boolean).join(' · ')}`}</Text>
           {alertOf(a) ? <Text color="error">{` · ${alertOf(a)}`}</Text> : null}
           <Text dimColor>)</Text>
         </Text>
       )
+    }
     const clock = (a: Agent) =>
-      Client && a.status === 'running' && a.seenRunning ? (
-        <Client key={`clock-${a.id}`} module="./live.tsx" props={{ since: a.firstSeen, now, pad: '', detail: '', alert: '', motion: false, clockOnly: true }} />
+      Client && isLive(a.status) && a.seenRunning ? (
+        <Client key={`clock-${a.id}`} module="./live.tsx" props={{ since: a.firstSeen, now, pad: '', detail: '', alert: '', word: '', mark: '', dim: true, motion: false, clockOnly: true }} />
       ) : (
         <Text dimColor>{elapsed(a, now)}</Text>
       )
@@ -756,7 +800,7 @@ export const register: Register = (on, options) => {
       const key = `${agent.id}:${await read($, rev)}:${agent.status}`
       if (transcript.key !== key) {
         const msgs = await $.session.messages({ agentId: agent.id })
-        transcript = { key, blocks: Array.isArray(msgs) ? transcriptBlocks(msgs, agent.status !== 'running') : [] }
+        transcript = { key, blocks: Array.isArray(msgs) ? transcriptBlocks(msgs, !isLive(agent.status)) : [] }
       }
       const blocks = transcript.blocks
       const open = new Set(await read($, expanded))
@@ -841,10 +885,6 @@ export const register: Register = (on, options) => {
           </Box>
         )
       }
-      const arm = async () => {
-        armedAt = await $.clock.now()
-        await update($, confirmStop, () => agent.id)
-      }
       return withHandle([
         header(
           <Box>
@@ -855,10 +895,10 @@ export const register: Register = (on, options) => {
           </Box>,
           <Box>
             {clock(agent)}
-            {agent.status !== 'running' ? null : armed === agent.id ? (
+            {!isLive(agent.status) ? null : armed === agent.id ? (
               <Button key="stop" label="Confirm stop" variant="primary" onPress={() => update($, confirmStop, () => null).then(() => stopAgent($, agent))} />
             ) : (
-              <Button key="stop" label="■ Stop" dimColor onPress={arm} />
+              <Button key="stop" label="■ Stop" dimColor onPress={() => armStop($, agent.id)} />
             )}
           </Box>,
         ),
@@ -904,11 +944,23 @@ export const register: Register = (on, options) => {
     const shown = visibleAgents(all, cfg.keepFinished)
     const hidingDone = await read($, hideDone)
     const { running, finished } = arrange(shown, hidingDone)
-    const goTo = async (to: string) => {
-      await showList($)
-      await update($, viewing, () => to)
-      await openPane($, 'conversation', true)
-    }
+    // The agent's transcript in the main view; where it cannot go there (a Claude Code before $.ui.view, a
+    // refusal), its conversation in the pane.
+    const goTo = (to: string) =>
+      viewIn($, to).then(async shown => {
+        if (shown) return
+        await showList($)
+        await update($, viewing, () => to)
+        await openPane($, 'conversation', true)
+      })
+    const armed = await read($, confirmStop)
+    // Stop on a live agent's row: pressed once it asks to be pressed again.
+    const stopButton = (a: Agent) =>
+      armed === a.id ? (
+        <Button key={`stop-${a.id}`} label="Confirm stop" variant="primary" onPress={() => update($, confirmStop, () => null).then(() => stopAgent($, a))} />
+      ) : (
+        <Button key={`stop-${a.id}`} label="■ Stop" dimColor onPress={() => armStop($, a.id)} />
+      )
     // Model loops no agent claims, recently active: a workflow's agents, compaction and memory forks.
     const quiet = Object.entries(await read($, loops)).filter(([, x]) => now - x.lastSeen < LOOP_SHOWN_MS)
     const loopsLine = quiet.length
@@ -932,7 +984,7 @@ export const register: Register = (on, options) => {
       const name = fit(oneLine(a.description || a.type), nameCols)
       return {
         name: name + ' '.repeat(Math.max(0, nameCols - cols(name))), mark: l.mark, color: l.color ?? '', dim: !!l.dim,
-        from: a.firstSeen, to: a.status === 'running' ? null : (a.endedAt ?? a.firstSeen),
+        from: a.firstSeen, to: isLive(a.status) ? null : (a.endedAt ?? a.firstSeen),
       }
     })
     const axisTitle = ` timeline${onAxis.length < batch.length ? ` · latest ${onAxis.length} of ${batch.length}` : ''} `
@@ -961,8 +1013,8 @@ export const register: Register = (on, options) => {
     ) : null
     const mark = (a: Agent) => (viewed === a.id ? ' ◂ main view' : '')
     const counts = <Box key="counts">
-      <Text dimColor>{runningCount ? `${runningCount} running` : ''}</Text>
-      <Text dimColor>{runningCount && doneCount ? ' · ' : ''}</Text>
+      <Text dimColor>{active}</Text>
+      <Text dimColor>{active && doneCount ? ' · ' : ''}</Text>
       {doneCount ? (
         <Button key="toggle-done" label={hidingDone ? `${doneCount} done (show)` : `${doneCount} done`} plain dimColor hover={{ color: 'claude', underline: true }} onPress={() => update($, hideDone, v => !v)} />
       ) : null}
@@ -970,7 +1022,7 @@ export const register: Register = (on, options) => {
 
     // Above the prompt (no fullscreen to dock in): a summary of at most INLINE_ROWS rows.
     if (inline) {
-      const live = all.filter(a => a.status === 'running') // a finished parent's running children too
+      const live = all.filter(a => isLive(a.status)) // a finished parent's running children too
       const SHOW = INLINE_ROWS - 3
       const ended = (s2: string) => all.filter(a => a.status === s2).length
       const tally = ['completed', 'failed', 'killed'].map(s2 => (ended(s2) ? `${look(s2).mark} ${ended(s2)} ${look(s2).word.toLowerCase()}` : '')).filter(Boolean)
@@ -1013,14 +1065,18 @@ export const register: Register = (on, options) => {
       const used = tok[a.id]
       const t = elapsed(a, now)
       const model = runsOn(a)
+      const stopCols = isLive(a.status) ? (armed === a.id ? CONFIRM_COLS : STOP_COLS) : 0
       const lines: RenderChildren[] = [
-        <Box key={`row-${a.id}`}>
-          <Text color={l.color} dimColor={l.dim}>{`${pad}⏺ `}</Text>
-          <Button key={`agent-${a.id}`} label={fit(nameOf(a, W), W - cols(pad) - 2 - cols(mark(a)))} plain hover={{ color: 'claude', underline: true }} onPress={() => goTo(a.id)} />
-          <Text color="claude">{mark(a)}</Text>
+        <Box key={`row-${a.id}`} width={W} justifyContent="space-between">
+          <Box>
+            <Text color={l.color} dimColor={l.dim}>{`${pad}⏺ `}</Text>
+            <Button key={`agent-${a.id}`} label={fit(nameOf(a, W), W - cols(pad) - 2 - cols(mark(a)) - stopCols)} plain hover={{ color: 'claude', underline: true }} onPress={() => goTo(a.id)} />
+            <Text color="claude">{mark(a)}</Text>
+          </Box>
+          {isLive(a.status) ? stopButton(a) : null}
         </Box>,
       ]
-      if (a.status === 'running') {
+      if (isLive(a.status)) {
         if (doing) {
           lines.push(<Text dimColor wrap="truncate-end">{`${pad}  ⎿  ${fit(doing.text, W)}`}</Text>)
           if (doing.tools > 1) lines.push(<Text dimColor>{`${pad}     +${doing.tools - 1} more tool use${doing.tools === 2 ? '' : 's'}`}</Text>)
@@ -1051,7 +1107,11 @@ export const register: Register = (on, options) => {
               <Text color="claude">✻ </Text>
               <Text bold>Agents</Text>
             </Text>,
-            counts,
+            <Box>
+              {viewed ? <Button key="main" label="◂ Main" dimColor onPress={() => viewIn($).then(ok => void (ok || $.ui.toast('The main view stayed where it is')))} /> : null}
+              {viewed ? <Text>  </Text> : null}
+              {counts}
+            </Box>,
           )}
           {shown.length ? null : <Text dimColor>No agents yet. They show here while they run.</Text>}
           {running.map(group)}
@@ -1064,7 +1124,7 @@ export const register: Register = (on, options) => {
         </Box>
         <Box flexDirection="column" flexShrink={0}>
           {axis}
-          {hint(shown.length ? `click an agent to open it${doneCount ? ' · click "done" to hide finished ones' : ''}` : '')}
+          {hint(shown.length ? `click an agent to view it${doneCount ? ' · click "done" to hide finished ones' : ''}` : '')}
         </Box>
       </Box>,
     )
@@ -1081,7 +1141,7 @@ export const register: Register = (on, options) => {
     if (!(await read($, tab))) return <Box flexDirection="column">{below}</Box>
     const all = await read($, agents)
     const count = (s: string) => all.filter(a => a.status === s).length
-    const running = count('running')
+    const running = all.filter(a => isLive(a.status)).length
     const label = [
       '◂ Agents',
       running ? `${look('running').mark} ${running}` : '',

@@ -5,7 +5,7 @@
 **在对话旁边看着你的 subagent 干活。**<br>
 Claude Code 会话派出的每个 subagent、它此刻在做什么、用了多少 token，点一下就能看它的完整对话。
 
-[![Version](https://img.shields.io/badge/version-1.1.1-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-d77757.svg)](https://github.com/xuanji86/claude-agentpane/releases)
 [![Claude Code mod](https://img.shields.io/badge/Claude%20Code-mod-c678dd.svg)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4eba65.svg)](LICENSE)
 [![validates](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-validates.svg)](https://github.com/karanb192/awesome-claude-code-mods)
@@ -18,7 +18,7 @@ Claude Code 会话派出的每个 subagent、它此刻在做什么、用了多�
 
 ## 为什么做这个
 
-Claude 把活分给 subagent 时，终端里每个 agent 只有一行，外加底部一个列表。**agentpane** 是一个 [mod](https://code.claude.com/docs/en/plugins/mods/overview)：把它们放进侧边面板，按 Claude Code 自己的写法显示，点开就能在原地看每个 agent 的对话。
+Claude 把活分给 subagent 时，终端里每个 agent 只有一行，外加底部一个列表。**agentpane** 是一个 [mod](https://code.claude.com/docs/en/plugins/mods/overview)：把它们放进侧边面板，按 Claude Code 自己的写法显示，点一个 agent，Claude Code 的主视图就切到它的对话。
 
 ## 功能
 
@@ -32,8 +32,8 @@ Claude 把活分给 subagent 时，终端里每个 agent 只有一行，外加�
 | **批次汇总** | 一批跑完后：`✓ 4 agents in 31s · 1m 18s of agent time (2.5× in parallel) · 21 tool uses · 190k tokens` |
 | **状态行** | pane 折叠或关闭时，输入框下方显示 `✻ 2 of 4 agents running` |
 | **跟随主视图** | 你从 Claude Code 底部列表打开的那个 agent，会标上 `◂ main view` |
-| **对话** | 点开 agent：任务说明、Markdown 显示的回复、工具调用及结果，连续的调用折叠成一行 |
-| **停止** | 先点 `■ Stop` 再点 `Confirm stop`，通过 Claude Code 的 TaskStop 结束运行中的 agent |
+| **对话** | 点一个 agent：主视图切到它的对话，pane 标题栏的 `◂ Main` 切回主对话。主视图切不过去时（Claude Code 2.1.300 之前），在 pane 里打开：任务说明、Markdown 显示的回复、工具调用及结果，连续的调用折叠成一行 |
+| **停止** | 在运行中的 agent 那一行先点 `■ Stop` 再点 `Confirm stop`，通过 Claude Code 的 TaskStop 结束它 |
 | **完成提醒** | agent 结束时弹提示，多个同时结束合成一条 |
 | **自动展开/折叠** | 有 agent 启动就打开，最后一个结束 10 秒后折叠成输入框上方的标签 |
 | **主题色** | 用 Claude Code 自己的主题色，深色、浅色、色盲友好主题都会跟着变 |
@@ -42,7 +42,7 @@ Claude 把活分给 subagent 时，终端里每个 agent 只有一行，外加�
 
 ## 安装
 
-需要 **Claude Code 2.1.287 或更高版本**（mod，即函数 hooks，从这个版本开始提供）；已在 2.1.288 上测试。侧边停靠需要 fullscreen 界面（`/tui fullscreen`）；非全屏时 agentpane 显示为输入框上方的摘要。mod 目前是早期功能，接口可能随版本变化，如果新版本导致 pane 失效，这里会发修复版。
+需要 **Claude Code 2.1.287 或更高版本**（mod，即函数 hooks，从这个版本开始提供）；已在 2.1.300 上测试。侧边停靠需要 fullscreen 界面（`/tui fullscreen`）；非全屏时 agentpane 显示为输入框上方的摘要。mod 目前是早期功能，接口可能随版本变化，如果新版本导致 pane 失效，这里会发修复版。
 
 ```text
 /plugin marketplace add xuanji86/claude-agentpane
@@ -65,11 +65,11 @@ claude plugin install agentpane@claude-agentpane
 <tr>
 <td width="60%" valign="top">
 
-**看对话**：点一个 agent
+**在 pane 里看对话**：Claude Code 2.1.300 之前
 
 <img src="assets/conversation.svg" alt="加宽后的 pane 里显示一个 agent 的对话" width="100%">
 
-pane 会加宽。`▲` `▼` 翻页（`k` `j`），`←` 返回（`b`）；往回翻时 agent 继续输出，视图也不会被顶走。点折叠的工具调用组可以展开。
+主视图切不过去时，点 agent 会在这里打开它的对话，pane 会加宽。`▲` `▼` 翻页（`k` `j`），`←` 返回（`b`）；往回翻时 agent 继续输出，视图也不会被顶走。点折叠的工具调用组可以展开。
 
 </td>
 <td width="40%" valign="top">
@@ -108,7 +108,7 @@ pane 隐藏，输入框上方留一个带计数的标签，点它重新打开；
 
 [![reach](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/xuanji86--claude-agentpane--agentpane-reach.svg)](https://github.com/karanb192/awesome-claude-code-mods)
 
-agentpane 只负责看，唯一的动作是你按下 Stop。每个 hook 都原样放行事件。
+agentpane 只负责看，只在你点 agent 或按 Stop 时才动作。每个 hook 都原样放行事件。
 
 | 它看到 | 通过 |
 | --- | --- |
@@ -117,10 +117,11 @@ agentpane 只负责看，唯一的动作是你按下 Stop。每个 hook 都原�
 | 每个 agent 的 token 用量和停止原因 | `turn.step` |
 | 你打开时，该 agent 的对话记录 | `$.session.messages({ agentId })` |
 | 主视图正在显示哪个 agent | pane 的 `view` |
+| 把主视图切到你点的 agent（`◂ Main` 切回） | `$.ui.view` |
 
 pane 之外它只画三样东西：输入框上方的标签、完成提示，和一行状态（`$.ui.status`）。
 
-它**不**联网、不运行外部命令、不读写文件、不跨会话保存任何东西，也不调用模型。唯一的动作是停止：在你第二次按下时调用 Claude Code 自带的 `TaskStop`，传过去的 agent 名字经过清理和截断。对话文字在显示前会去掉控制字符、双向控制符和零宽字符，并截断长度。`claude plugin validate .` 会列出它挂了哪些 hook、调用了什么。
+它**不**联网、不运行外部命令、不读写文件、不跨会话保存任何东西，也不调用模型。它的动作都由你触发：你点 agent 时切换主视图；停止则在你第二次按下时调用 Claude Code 自带的 `TaskStop`，传过去的 agent 名字经过清理和截断。对话文字在显示前会去掉控制字符、双向控制符和零宽字符，并截断长度。`claude plugin validate .` 会列出它挂了哪些 hook、调用了什么。
 
 ## 哪些是推断的，不是实测的
 
@@ -133,7 +134,7 @@ pane 之外它只画三样东西：输入框上方的标签、完成提示，和
 
 ## 限制
 
-- **主视图归你：** mod 无法把 Claude Code 的主视图切到某个 agent，这件事交给底部 agent 列表（↓ 再 Enter）；agentpane 在 pane 里显示对话，并标出主视图正在看的那个。
+- **主视图只在你点击时切换，** 且需要 Claude Code 2.1.300（`$.ui.view`）。更早的版本，以及 Claude Desktop 自带的 Claude Code 还没跟上时，对话改在 pane 里打开。
 - **workflow 派出的 agent** 没有名字可列：引擎不把它们交给 mod，只能在"其他模型循环"里计数。
 
 ## 排错

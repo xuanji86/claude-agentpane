@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0 — 2026-10-14
+
+- **The main view, on a click:** clicking an agent switches Claude Code's main view to its transcript (`$.ui.view`,
+  Claude Code 2.1.300), and `◂ Main` in the pane's header switches back; the pane keeps its list and does not fold
+  while an agent is in view. Where the view can't switch, the conversation opens in the pane as before.
+- **Stop on the list:** a running agent's row has its own `■ Stop` (press again to confirm).
+- **Waiting is not done:** an agent waiting on its own background work (`waiting`) or not started yet (`pending`)
+  stays live: no finish toast, no fold, listed as `✻ Waiting…` and counted apart (`1 running · 1 waiting`, in the
+  header and the status line). Before, anything but `running` counted as finished.
+- **Quiet in the desktop app, also off screen:** the desktop app attaches to a session only while its window shows
+  it, so quiet now means "nothing but the desktop app draws this session", none at all included; a background
+  desktop session no longer opens the pane for the moment you switch back to it. VS Code and phones are unchanged.
+
 ## 1.1.4 — 2026-10-04
 
 - **Quiet in the desktop app:** a session drawn only in Claude Desktop, which has its own agents view, no longer gets

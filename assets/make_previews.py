@@ -5,7 +5,7 @@ import html, os, unicodedata
 OUT = os.path.dirname(os.path.abspath(__file__))
 CW, LH, FS, PAD = 8.4, 19, 14, 18
 C = dict(bg='#1f1f1f', fg='#e8e8e8', dim='#8a8a8a', faint='#5c5c5c', claude='#d77757', shimmer='#eb9f7f',
-         ok='#4eba65', err='#ff6b80', line='#4a4a4a')
+         ok='#4eba65', err='#ff6b80', warn='#ffc107', line='#4a4a4a')
 
 
 def w(s):
@@ -100,18 +100,27 @@ def lane(mark, color, name, before, bar, after, took):
     return [(mark + ' ', color), (name.ljust(23), 'fg'), (' ' + '·' * before, 'dim'), ('━' * bar, color), ('·' * after + took.rjust(8), 'dim')]
 
 
+PANE_W = 61  # the pane's content columns in pane.svg (126 - 60 - 5)
+
+
+def spread(left, right, width):
+    """A row with `right` against the right edge of `width` columns, as a space-between Box lays it out."""
+    gap = width - sum(w(t) for t, *_ in left) - sum(w(t) for t, *_ in right)
+    return left + [(' ' * max(1, gap), 'dim')] + right
+
+
 LIST = [
-    [('✻ ', 'claude'), ('Agents', 'fg', 1), ('               2 running · 1 done', 'dim')],
+    spread([('✻ ', 'claude'), ('Agents', 'fg', 1)], [('◂ Main', 'dim'), ('  2 running · 1 done', 'dim')], PANE_W - 3),
     [],
-    [('⏺ ', 'claude'), ('general-purpose(Refactor the parser)', 'fg')],
+    spread([('⏺ ', 'claude'), ('general-purpose(Refactor the parser)', 'fg')], [('■ Stop', 'dim')], PANE_W),
     [('  ⎿  ', 'dim'), ('Bash(npm test -- parser)', 'dim')],
     [('     +6 more tool uses', 'dim')],
     [('  ✶ ', 'claude'), ('Run', 'claude'), ('nin', 'shimmer'), ('g…', 'claude'), (' (1m 12s · Opus 5.5 · 412k in · 1.9k out)', 'dim')],
     [],
-    [('⏺ ', 'claude'), ('Explore(Find every caller of parse())', 'fg'), (' ◂ main view', 'claude')],
-    [('  ⎿  ', 'dim'), ('Grep(parse\\()', 'dim')],
+    spread([('⏺ ', 'warn'), ('Explore(Find every caller of parse())', 'fg'), (' ◂ main view', 'claude')], [('■ Stop', 'dim')], PANE_W),
+    [('  ⎿  ', 'dim'), ('Bash(rg -n "parse\\(" src)', 'dim')],
     [('     +2 more tool uses', 'dim')],
-    [('  ✶ ', 'claude'), ('Running…', 'claude'), (' (24s · Haiku 4.5 · 61k in · 540 out)', 'dim')],
+    [('  ✻ ', 'warn'), ('Waiting…', 'warn'), (' (24s · Haiku 5.5 · 61k in · 540 out)', 'dim')],
     [],
     [('⏺ ', 'ok'), ('Plan(Draft the migration)', 'fg')],
     [('  ⎿  Done (9 tool uses · 188k tokens · Sonnet 5.5 · 2m 3s)', 'dim')],
@@ -121,8 +130,8 @@ LIST = [
     [('── timeline ' + '─' * 49, 'dim')],
     lane('✓', 'ok', 'Draft the migration', 0, 24, 3, '2m 3s'),
     lane('✻', 'claude', 'Refactor the parser', 13, 14, 0, '1m 12s'),
-    lane('✻', 'claude', 'Find every caller of p…', 22, 5, 0, '24s'),
-    [('click an agent to open it', 'dim')],
+    lane('✻', 'warn', 'Find every caller of p…', 22, 5, 0, '24s'),
+    [('click an agent to view it · click "done" to hide finished ones', 'dim')],
 ]
 scene('pane.svg', TRANSCRIPT[:8], LIST, split=60, cols=126)
 
