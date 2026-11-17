@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { On, RenderSurface, UiViewResult } from 'claude-code'
 
 const PANE = {
   plugin: 'agentpane', surface: 'terminal', component: 'Pane', requestId: 'agents',
@@ -16,8 +16,8 @@ type World = {
   agents: { id: string; description: string; type: string; status: string }[]; panes: string[]; opened: number; closed: number
   widths?: (number | undefined)[]; focus?: (boolean | undefined)[]; toasts?: string[]; tools?: { tool: string; task_id?: string; consent?: string }[]
   placed?: boolean; stopAnswer?: object; messages?: object[]; stopReason?: string; rows?: (number | undefined)[]; status?: (string | undefined)[]
-  surfaces?: string[]
-  view?: object; views?: object[] // the engine's answer to $.ui.view (absent: an engine without it), what it was asked
+  surfaces?: RenderSurface[]
+  view?: UiViewResult; views?: object[] // the engine's answer to $.ui.view (absent: an engine without it), what it was asked
   beforeList?: () => Promise<void> // runs while a sync waits on the engine's list
 }
 
@@ -50,8 +50,9 @@ const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, 
   on('ui.toast', ($, e) => ((world.toasts ??= []).push(String((e as { text?: string }).text ?? e)), { value: undefined }) as never)
   on('ui.status', ($, e) => ((world.status ??= []).push((e as { text?: string }).text), { value: undefined }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.surfaces' as never, () => ({ value: world.surfaces ?? ['terminal'] }) as never)
-  if (world.view) on('ui.view' as never, ($, e) => ((world.views ??= []).push(e as object), { value: world.view }) as never)
+  on('session.surfaces', () => ({ value: world.surfaces ?? ['terminal'] }))
+  const view = world.view
+  if (view) on('ui.view', ($, e) => ((world.views ??= []).push(e as object), { value: view }))
   on('turn.step', async function* () {
     return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: world.stopReason ?? 'tool_use', usage: { model: 'm', input_tokens: 10, output_tokens: 1_200, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0 } }
   } as never)

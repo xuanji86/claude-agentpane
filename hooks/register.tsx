@@ -659,7 +659,7 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const id = e.agentId
     if (id) {
-      const text = describeTool(e.tool, e as unknown as Record<string, unknown>)
+      const text = describeTool('tool' in e ? e.tool : '', e as unknown as Record<string, unknown>)
       void update($, activity, m => ({ ...m, [id]: { text, tools: (m[id]?.tools ?? 0) + 1 } })).catch(() => undefined)
       redraw($, id)
     }
@@ -831,7 +831,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column" flexShrink={0}>
           <Text wrap="truncate-end">
             <Text color={STATE_COLOR[c.state]}>⏺ </Text>
-            <Text bold>{c.name}</Text>
+            <Text weight="semibold">{c.name}</Text>
             <Text>{c.arg ? `(${c.arg})` : ''}</Text>
           </Text>
           {result(c)}
@@ -890,7 +890,7 @@ export const register: Register = (on, options) => {
           <Box>
             <Button key="back" label="←" hotkey="b" dimColor onPress={leave} />
             <Text color={l.color} dimColor={l.dim}> ⏺ </Text>
-            <Text bold>{fit(oneLine(agent.type), 20)}</Text>
+            <Text weight="semibold">{fit(oneLine(agent.type), 20)}</Text>
             <Text>{`(${fit(oneLine(agent.description), Math.max(8, W - 42 - cols(agent.type)))})`}</Text>
           </Box>,
           <Box>
@@ -1031,7 +1031,7 @@ export const register: Register = (on, options) => {
           {header(
             <Text>
               <Text color="claude">✻ </Text>
-              <Text bold>Agents</Text>
+              <Text weight="semibold">Agents</Text>
             </Text>,
             <Box>
               {counts}
@@ -1105,7 +1105,7 @@ export const register: Register = (on, options) => {
           {header(
             <Text>
               <Text color="claude">✻ </Text>
-              <Text bold>Agents</Text>
+              <Text weight="semibold">Agents</Text>
             </Text>,
             <Box>
               {viewed ? <Button key="main" label="◂ Main" dimColor onPress={() => viewIn($).then(ok => void (ok || $.ui.toast('The main view stayed where it is')))} /> : null}

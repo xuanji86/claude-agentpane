@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1 — 2026-11-17
+
+- **Current Claude Code types (2.1.326):** names drawn bold use `weight: 'semibold'` (`bold` is deprecated); a tool call
+  is read as one only where it names a tool; the tests' agents carry every field `AgentInfo` now has.
+
 ## 1.2.0 — 2026-10-14
 
 - **The main view, on a click:** clicking an agent switches Claude Code's main view to its transcript (`$.ui.view`,

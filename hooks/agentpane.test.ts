@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { SessionMessage } from 'claude-code'
+import type { AgentInfo, AgentStatus, SessionMessage } from 'claude-code'
 
 import { addUsage, arrange, batchReceipt, lastCalls, finishNotice, clean, cols, describeTool, fmtTokens, latestBatch, statusOf, groupSummary, mergeAgents, parseConfig, pickBlocks, prettyEffort, prettyModel, preview, runsOn, spawned, stepLoop, toolParts, transcriptBlocks, visibleAgents, wrap } from './register'
 import type { Block } from './register'
 import { fmtDuration, laneRows } from './time'
 
-const info = (id: string, status = 'running', parentId?: string) => ({ id, description: `task ${id}`, type: 'Explore', status, ...(parentId && { parentId }) })
+const info = (id: string, status: AgentStatus = 'running', parentId?: string): AgentInfo => ({
+  id, description: `task ${id}`, type: 'Explore', status, ...(parentId && { parentId }),
+  kind: 'local_agent', taskStatus: status === 'completed' || status === 'failed' || status === 'killed' ? status : 'running',
+  label: `task ${id}`, startTime: 0, cwd: '/w', tokenCount: 0, tokenSamples: [], hasRow: false,
+})
 const say = (role: 'user' | 'assistant', text: string, toolUses: SessionMessage['toolUses'] = []): SessionMessage => ({ role, text, toolUses })
 
 describe('agents', () => {
